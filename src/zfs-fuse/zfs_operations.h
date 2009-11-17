@@ -35,5 +35,6 @@ extern int block_cache;
 extern int page_cache;
 extern int cf_enable_xattr;
 extern float fuse_attr_timeout, fuse_entry_timeout;
+void zfsfuse_getcred(fuse_req_t req, cred_t *cred);
 
 #endif
