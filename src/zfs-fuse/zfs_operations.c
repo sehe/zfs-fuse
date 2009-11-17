@@ -44,6 +44,7 @@
 
 #include "util.h"
 #include "fuse_listener.h"
+#include <sys/zfs_ctldir.h>
 
 #define ZFS_MAGIC 0x2f52f5
 
@@ -51,7 +52,7 @@
 int block_cache, page_cache;
 float fuse_attr_timeout, fuse_entry_timeout;
 
-static void zfsfuse_getcred(fuse_req_t req, cred_t *cred)
+void zfsfuse_getcred(fuse_req_t req, cred_t *cred)
 {
 	const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
@@ -191,15 +192,6 @@ static void zfsfuse_getattr_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_f
 	if(error)
 		fuse_reply_err(req, error);
 }
-
-static int int_zfs_enter(zfsvfs_t *zfsvfs) {
-    ZFS_ENTER(zfsvfs);
-    return 0;
-}
-
-// This macro allows to call ZFS_ENTER from a void function without warning
-#define ZFS_VOID_ENTER(a) \
-    if (int_zfs_enter(zfsvfs) != 0) return;
 
 /* This macro makes the lookup for the xattr directory, necessary for listxattr
  * getxattr and setxattr */

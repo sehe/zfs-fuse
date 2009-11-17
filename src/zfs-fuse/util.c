@@ -44,6 +44,7 @@
 #include "fuse.h"
 #include "zfs_operations.h"
 #include "util.h"
+#include <sys/zfs_ctldir.h>
 
 int ioctl_fd = -1;
 
@@ -236,6 +237,7 @@ int do_mount(char *spec, char *dir, int mflag, char *opt)
 		fuse_unmount(dir,ch);
 		return EIO;
 	}
+	fuse_setup_ctldir(vfs->vfs_data,dir);
 
 	return 0;
 }
