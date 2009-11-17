@@ -387,6 +387,11 @@ snapdir_changed_cb(void *arg, uint64_t newval)
 	zfsvfs_t *zfsvfs = arg;
 
 	zfsvfs->z_show_ctldir = newval;
+	if (zfsvfs->z_show_ctldir) 
+	    zfsctl_create(zfsvfs);
+	else 
+	    zfsctl_umount_snapshots(zfsvfs->z_vfs,0,kcred);
+
 }
 
 static void
@@ -1151,9 +1156,8 @@ zfs_domount(vfs_t *vfsp, char *osname)
 		error = zfsvfs_setup(zfsvfs, B_TRUE);
 	}
 
-	/* ZFSFUSE: FIXME
 	if (!zfsvfs->z_issnap)
-		zfsctl_create(zfsvfs);*/
+		zfsctl_create(zfsvfs);
 out:
 	if (error) {
 		dmu_objset_disown(zfsvfs->z_os, zfsvfs);
@@ -1692,13 +1696,10 @@ zfs_umount(vfs_t *vfsp, int fflag, cred_t *cr)
 	 * Unmount any snapshots mounted under .zfs before unmounting the
 	 * dataset itself.
 	 */
-	/* ZFSFUSE: FIXME */
-#if 0
-	if (zfsvfs->z_ctldir != NULL &&
+	if (zfsvfs->z_show_ctldir &&
 	    (ret = zfsctl_umount_snapshots(vfsp, fflag, cr)) != 0) {
 		return (ret);
 	}
-#endif
 
 	if (!(fflag & MS_FORCE)) {
 		/*
@@ -1747,10 +1748,8 @@ zfs_umount(vfs_t *vfsp, int fflag, cred_t *cr)
 	/*
 	 * We can now safely destroy the '.zfs' directory node.
 	 */
-#if 0
-	if (zfsvfs->z_ctldir != NULL)
+	if (zfsvfs->z_show_ctldir)
 		zfsctl_destroy(zfsvfs);
-#endif
 
 	return (0);
 }
@@ -1977,8 +1976,7 @@ zfs_init(void)
 	/*
 	 * Initialize .zfs directory structures
 	 */
-	/* ZFSFUSE: TODO */
-	/* zfsctl_init(); */
+	zfsctl_init(); 
 
 	/*
 	 * Initialize znode cache, vnode ops, etc...
@@ -1991,8 +1989,7 @@ zfs_init(void)
 void
 zfs_fini(void)
 {
-	/* ZFSFUSE: TODO */
-	/* zfsctl_fini(); */
+	zfsctl_fini(); 
 	zfs_znode_fini();
 }
 
