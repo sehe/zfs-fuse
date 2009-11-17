@@ -127,6 +127,7 @@ struct vdev {
 	space_map_t	vdev_dtl[DTL_TYPES]; /* in-core dirty time logs	*/
 	vdev_stat_t	vdev_stat;	/* virtual device statistics	*/
 	boolean_t	vdev_expanding;	/* expand the vdev?		*/
+	boolean_t	vdev_reopening;	/* reopen in progress?		*/
 
 	int		vdev_open_error; /* error on last open		*/
 	kthread_t	*vdev_open_thread; /* thread opening children	*/
@@ -184,6 +185,7 @@ struct vdev {
 	vdev_cache_t	vdev_cache;	/* physical block cache		*/
 	spa_aux_vdev_t	*vdev_aux;	/* for l2cache vdevs		*/
 	zio_t		*vdev_probe_zio; /* root of current probe	*/
+	vdev_aux_t	vdev_label_aux;	/* on-disk aux state		*/
 
 	/*
 	 * For DTrace to work in userland (libzpool) context, these fields must
@@ -196,6 +198,8 @@ struct vdev {
 	kmutex_t	vdev_stat_lock;	/* vdev_stat			*/
 	kmutex_t	vdev_probe_lock; /* protects vdev_probe_zio	*/
 };
+
+#define	VDEV_RAIDZ_MAXPARITY	3
 
 #define	VDEV_PAD_SIZE		(8 << 10)
 /* 2 padding areas (vl_pad1 and vl_pad2) to skip */

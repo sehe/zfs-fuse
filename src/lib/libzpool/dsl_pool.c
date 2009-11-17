@@ -347,6 +347,15 @@ dsl_pool_sync(dsl_pool_t *dp, uint64_t txg)
 	}
 	err = zio_wait(zio);
 
+	/*
+	 * If anything was added to a deadlist during a zio done callback,
+	 * it had to be put on the deferred queue.  Enqueue it for real now.
+	 */
+	for (ds = list_head(&dp->dp_synced_datasets); ds;
+	    ds = list_next(&dp->dp_synced_datasets, ds))
+		bplist_sync(&ds->ds_deadlist,
+		    bplist_enqueue_cb, &ds->ds_deadlist, tx);
+
 	while (dstg = txg_list_remove(&dp->dp_sync_tasks, txg)) {
 		/*
 		 * No more sync tasks should have been added while we
@@ -423,16 +432,19 @@ dsl_pool_sync(dsl_pool_t *dp, uint64_t txg)
 }
 
 void
-dsl_pool_zil_clean(dsl_pool_t *dp)
+dsl_pool_sync_done(dsl_pool_t *dp, uint64_t txg)
 {
 	dsl_dataset_t *ds;
+	objset_t *os;
 
 	while (ds = list_head(&dp->dp_synced_datasets)) {
 		list_remove(&dp->dp_synced_datasets, ds);
-		ASSERT(ds->ds_objset != NULL);
-		zil_clean(ds->ds_objset->os_zil);
+		os = ds->ds_objset;
+		zil_clean(os->os_zil);
+		ASSERT(!dmu_objset_is_dirty(os, txg));
 		dmu_buf_rele(ds->ds_dbuf, ds);
 	}
+	ASSERT(!dmu_objset_is_dirty(dp->dp_meta_objset, txg));
 }
 
 /*
@@ -711,7 +723,7 @@ dsl_pool_user_hold_create_obj(dsl_pool_t *dp, dmu_tx_t *tx)
 
 static int
 dsl_pool_user_hold_rele_impl(dsl_pool_t *dp, uint64_t dsobj,
-    const char *tag, time_t *t, dmu_tx_t *tx, boolean_t holding)
+    const char *tag, uint64_t *now, dmu_tx_t *tx, boolean_t holding)
 {
 	objset_t *mos = dp->dp_meta_objset;
 	uint64_t zapobj = dp->dp_tmp_userrefs_obj;
@@ -736,7 +748,7 @@ dsl_pool_user_hold_rele_impl(dsl_pool_t *dp, uint64_t dsobj,
 
 	name = kmem_asprintf("%llx-%s", (u_longlong_t)dsobj, tag);
 	if (holding)
-		error = zap_add(mos, zapobj, name, 8, 1, t, tx);
+		error = zap_add(mos, zapobj, name, 8, 1, now, tx);
 	else
 		error = zap_remove(mos, zapobj, name, tx);
 	strfree(name);
@@ -749,9 +761,9 @@ dsl_pool_user_hold_rele_impl(dsl_pool_t *dp, uint64_t dsobj,
  */
 int
 dsl_pool_user_hold(dsl_pool_t *dp, uint64_t dsobj, const char *tag,
-    time_t *t, dmu_tx_t *tx)
+    uint64_t *now, dmu_tx_t *tx)
 {
-	return (dsl_pool_user_hold_rele_impl(dp, dsobj, tag, t, tx, B_TRUE));
+	return (dsl_pool_user_hold_rele_impl(dp, dsobj, tag, now, tx, B_TRUE));
 }
 
 /*

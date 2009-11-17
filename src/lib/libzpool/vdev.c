@@ -409,10 +409,7 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 	if (ops == &vdev_raidz_ops) {
 		if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NPARITY,
 		    &nparity) == 0) {
-			/*
-			 * Currently, we can only support 3 parity devices.
-			 */
-			if (nparity == 0 || nparity > 3)
+			if (nparity == 0 || nparity > VDEV_RAIDZ_MAXPARITY)
 				return (EINVAL);
 			/*
 			 * Previous versions could only support 1 or 2 parity
@@ -494,6 +491,14 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 		    &vd->vdev_asize);
 	}
 
+	if (parent && !parent->vdev_parent) {
+		ASSERT(alloctype == VDEV_ALLOC_LOAD ||
+		    alloctype == VDEV_ALLOC_ADD ||
+		    alloctype == VDEV_ALLOC_ROOTPOOL);
+		vd->vdev_mg = metaslab_group_create(islog ?
+		    spa_log_class(spa) : spa_normal_class(spa), vd);
+	}
+
 	/*
 	 * If we're a leaf vdev, try to load the DTL object and other state.
 	 */
@@ -521,7 +526,8 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 		/*
 		 * When importing a pool, we want to ignore the persistent fault
 		 * state, as the diagnosis made on another system may not be
-		 * valid in the current context.
+		 * valid in the current context.  Local vdevs will
+		 * remain in the faulted state.
 		 */
 		if (spa->spa_load_state == SPA_LOAD_OPEN) {
 			(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_FAULTED,
@@ -530,6 +536,17 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 			    &vd->vdev_degraded);
 			(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_REMOVED,
 			    &vd->vdev_removed);
+
+			if (vd->vdev_faulted || vd->vdev_degraded) {
+				char *aux;
+
+				vd->vdev_label_aux =
+				    VDEV_AUX_ERR_EXCEEDED;
+				if (nvlist_lookup_string(nv,
+				    ZPOOL_CONFIG_AUX_STATE, &aux) == 0 &&
+				    strcmp(aux, "external") == 0)
+					vd->vdev_label_aux = VDEV_AUX_EXTERNAL;
+			}
 		}
 	}
 
@@ -555,6 +572,7 @@ vdev_free(vdev_t *vd)
 	vdev_close(vd);
 
 	ASSERT(!list_link_active(&vd->vdev_config_dirty_node));
+	ASSERT(!list_link_active(&vd->vdev_state_dirty_node));
 
 	/*
 	 * Free all children.
@@ -568,8 +586,10 @@ vdev_free(vdev_t *vd)
 	/*
 	 * Discard allocation state.
 	 */
-	if (vd == vd->vdev_top)
+	if (vd->vdev_mg != NULL) {
 		vdev_metaslab_fini(vd);
+		metaslab_group_destroy(vd->vdev_mg);
+	}
 
 	ASSERT3U(vd->vdev_stat.vs_space, ==, 0);
 	ASSERT3U(vd->vdev_stat.vs_dspace, ==, 0);
@@ -777,12 +797,13 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 {
 	spa_t *spa = vd->vdev_spa;
 	objset_t *mos = spa->spa_meta_objset;
-	metaslab_class_t *mc;
 	uint64_t m;
 	uint64_t oldc = vd->vdev_ms_count;
 	uint64_t newc = vd->vdev_asize >> vd->vdev_ms_shift;
 	metaslab_t **mspp;
 	int error;
+
+	ASSERT(txg == 0 || spa_config_held(spa, SCL_ALLOC, RW_WRITER));
 
 	/*
 	 * This vdev is not being allocated from yet or is a hole.
@@ -802,14 +823,6 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 	    (vdev_psize_to_asize(vd, 1 << 17) >> SPA_MINBLOCKSHIFT);
 
 	ASSERT(oldc <= newc);
-
-	if (vd->vdev_islog)
-		mc = spa->spa_log_class;
-	else
-		mc = spa->spa_normal_class;
-
-	if (vd->vdev_mg == NULL)
-		vd->vdev_mg = metaslab_group_create(mc, vd);
 
 	mspp = kmem_zalloc(newc * sizeof (*mspp), KM_SLEEP);
 
@@ -845,6 +858,15 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 		    m << vd->vdev_ms_shift, 1ULL << vd->vdev_ms_shift, txg);
 	}
 
+	if (txg == 0)
+		spa_config_enter(spa, SCL_ALLOC, FTAG, RW_WRITER);
+
+	if (oldc == 0)
+		metaslab_group_activate(vd->vdev_mg);
+
+	if (txg == 0)
+		spa_config_exit(spa, SCL_ALLOC, FTAG);
+
 	return (0);
 }
 
@@ -855,6 +877,7 @@ vdev_metaslab_fini(vdev_t *vd)
 	uint64_t count = vd->vdev_ms_count;
 
 	if (vd->vdev_ms != NULL) {
+		metaslab_group_passivate(vd->vdev_mg);
 		for (m = 0; m < count; m++)
 			if (vd->vdev_ms[m] != NULL)
 				metaslab_fini(vd->vdev_ms[m]);
@@ -1086,10 +1109,16 @@ vdev_open(vdev_t *vd)
 	vd->vdev_cant_write = B_FALSE;
 	vd->vdev_min_asize = vdev_get_min_asize(vd);
 
+	/*
+	 * If this vdev is not removed, check its fault status.  If it's
+	 * faulted, bail out of the open.
+	 */
 	if (!vd->vdev_removed && vd->vdev_faulted) {
 		ASSERT(vd->vdev_children == 0);
+		ASSERT(vd->vdev_label_aux == VDEV_AUX_ERR_EXCEEDED ||
+		    vd->vdev_label_aux == VDEV_AUX_EXTERNAL);
 		vdev_set_state(vd, B_TRUE, VDEV_STATE_FAULTED,
-		    VDEV_AUX_ERR_EXCEEDED);
+		    vd->vdev_label_aux);
 		return (ENXIO);
 	} else if (vd->vdev_offline) {
 		dprintf("vdev_open(): vd->vdev_offline\n");
@@ -1100,6 +1129,11 @@ vdev_open(vdev_t *vd)
 
 	error = vd->vdev_ops->vdev_op_open(vd, &osize, &ashift);
 
+	/*
+	 * Reset the vdev_reopening flag so that we actually close
+	 * the vdev on error.
+	 */
+	vd->vdev_reopening = B_FALSE;
 	if (zio_injection_enabled && error == 0)
 		error = zio_handle_device_injection(vd, NULL, ENXIO);
 
@@ -1115,12 +1149,25 @@ vdev_open(vdev_t *vd)
 
 	vd->vdev_removed = B_FALSE;
 
+	/*
+	 * Recheck the faulted flag now that we have confirmed that
+	 * the vdev is accessible.  If we're faulted, bail.
+	 */
+	if (vd->vdev_faulted) {
+		ASSERT(vd->vdev_children == 0);
+		ASSERT(vd->vdev_label_aux == VDEV_AUX_ERR_EXCEEDED ||
+		    vd->vdev_label_aux == VDEV_AUX_EXTERNAL);
+		vdev_set_state(vd, B_TRUE, VDEV_STATE_FAULTED,
+		    vd->vdev_label_aux);
+		return (ENXIO);
+	}
+
 	if (vd->vdev_degraded) {
 		ASSERT(vd->vdev_children == 0);
 		vdev_set_state(vd, B_TRUE, VDEV_STATE_DEGRADED,
 		    VDEV_AUX_ERR_EXCEEDED);
 	} else {
-		vd->vdev_state = VDEV_STATE_HEALTHY;
+		vdev_set_state(vd, B_TRUE, VDEV_STATE_HEALTHY, 0);
 	}
 
 	/*
@@ -1322,8 +1369,12 @@ void
 vdev_close(vdev_t *vd)
 {
 	spa_t *spa = vd->vdev_spa;
+	vdev_t *pvd = vd->vdev_parent;
 
 	ASSERT(spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
+
+	if (pvd != NULL && pvd->vdev_reopening)
+		vd->vdev_reopening = pvd->vdev_reopening;
 
 	vd->vdev_ops->vdev_op_close(vd);
 
@@ -1343,6 +1394,12 @@ vdev_close(vdev_t *vd)
 	vd->vdev_stat.vs_aux = VDEV_AUX_NONE;
 }
 
+/*
+ * Reopen all interior vdevs and any unopened leaves.  We don't actually
+ * reopen leaf vdevs which had previously been opened as they might deadlock
+ * on the spa_config_lock.  Instead we only obtain the leaf's physical size.
+ * If the leaf has never been opened then open it, as usual.
+ */
 void
 vdev_reopen(vdev_t *vd)
 {
@@ -1350,6 +1407,7 @@ vdev_reopen(vdev_t *vd)
 
 	ASSERT(spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
 
+	vd->vdev_reopening = B_TRUE;
 	vdev_close(vd);
 	(void) vdev_open(vd);
 
@@ -1527,7 +1585,7 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 		vdev_dtl_reassess(vd->vdev_child[c], txg,
 		    scrub_txg, scrub_done);
 
-	if (vd == spa->spa_root_vdev || vd->vdev_ishole)
+	if (vd == spa->spa_root_vdev || vd->vdev_ishole || vd->vdev_aux)
 		return;
 
 	if (vd->vdev_ops->vdev_op_leaf) {
@@ -1582,6 +1640,8 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 
 	mutex_enter(&vd->vdev_dtl_lock);
 	for (int t = 0; t < DTL_TYPES; t++) {
+		/* account for child's outage in parent's missing map */
+		int s = (t == DTL_MISSING) ? DTL_OUTAGE: t;
 		if (t == DTL_SCRUB)
 			continue;			/* leaf vdevs only */
 		if (t == DTL_PARTIAL)
@@ -1594,7 +1654,7 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 		for (int c = 0; c < vd->vdev_children; c++) {
 			vdev_t *cvd = vd->vdev_child[c];
 			mutex_enter(&cvd->vdev_dtl_lock);
-			space_map_ref_add_map(&reftree, &cvd->vdev_dtl[t], 1);
+			space_map_ref_add_map(&reftree, &cvd->vdev_dtl[s], 1);
 			mutex_exit(&cvd->vdev_dtl_lock);
 		}
 		space_map_ref_generate_map(&reftree, &vd->vdev_dtl[t], minref);
@@ -1932,7 +1992,7 @@ vdev_psize_to_asize(vdev_t *vd, uint64_t psize)
  * not be opened, and no I/O is attempted.
  */
 int
-vdev_fault(spa_t *spa, uint64_t guid)
+vdev_fault(spa_t *spa, uint64_t guid, vdev_aux_t aux)
 {
 	vdev_t *vd;
 
@@ -1945,11 +2005,18 @@ vdev_fault(spa_t *spa, uint64_t guid)
 		return (spa_vdev_state_exit(spa, NULL, ENOTSUP));
 
 	/*
+	 * We don't directly use the aux state here, but if we do a
+	 * vdev_reopen(), we need this value to be present to remember why we
+	 * were faulted.
+	 */
+	vd->vdev_label_aux = aux;
+
+	/*
 	 * Faulted state takes precedence over degraded.
 	 */
 	vd->vdev_faulted = 1ULL;
 	vd->vdev_degraded = 0ULL;
-	vdev_set_state(vd, B_FALSE, VDEV_STATE_FAULTED, VDEV_AUX_ERR_EXCEEDED);
+	vdev_set_state(vd, B_FALSE, VDEV_STATE_FAULTED, aux);
 
 	/*
 	 * If marking the vdev as faulted cause the top-level vdev to become
@@ -1967,10 +2034,8 @@ vdev_fault(spa_t *spa, uint64_t guid)
 		 */
 		vdev_reopen(vd);
 
-		if (vdev_readable(vd)) {
-			vdev_set_state(vd, B_FALSE, VDEV_STATE_DEGRADED,
-			    VDEV_AUX_ERR_EXCEEDED);
-		}
+		if (vdev_readable(vd))
+			vdev_set_state(vd, B_FALSE, VDEV_STATE_DEGRADED, aux);
 	}
 
 	return (spa_vdev_state_exit(spa, vd, 0));
@@ -1982,7 +2047,7 @@ vdev_fault(spa_t *spa, uint64_t guid)
  * as I/O is concerned.
  */
 int
-vdev_degrade(spa_t *spa, uint64_t guid)
+vdev_degrade(spa_t *spa, uint64_t guid, vdev_aux_t aux)
 {
 	vdev_t *vd;
 
@@ -2003,7 +2068,7 @@ vdev_degrade(spa_t *spa, uint64_t guid)
 	vd->vdev_degraded = 1ULL;
 	if (!vdev_is_dead(vd))
 		vdev_set_state(vd, B_FALSE, VDEV_STATE_DEGRADED,
-		    VDEV_AUX_ERR_EXCEEDED);
+		    aux);
 
 	return (spa_vdev_state_exit(spa, vd, 0));
 }
@@ -2083,8 +2148,8 @@ vdev_offline_log(spa_t *spa)
 	return (error);
 }
 
-int
-vdev_offline(spa_t *spa, uint64_t guid, uint64_t flags)
+static int
+vdev_offline_locked(spa_t *spa, uint64_t guid, uint64_t flags)
 {
 	vdev_t *vd, *tvd;
 	int error = 0;
@@ -2118,17 +2183,16 @@ top:
 			return (spa_vdev_state_exit(spa, NULL, EBUSY));
 
 		/*
-		 * If the top-level is a slog and it's had allocations
-		 * then proceed. We check that the vdev's metaslab
-		 * grop is not NULL since it's possible that we may
-		 * have just added this vdev and have not yet initialized
-		 * it's metaslabs.
+		 * If the top-level is a slog and it has had allocations
+		 * then proceed.  We check that the vdev's metaslab group
+		 * is not NULL since it's possible that we may have just
+		 * added this vdev but not yet initialized its metaslabs.
 		 */
 		if (tvd->vdev_islog && mg != NULL) {
 			/*
 			 * Prevent any future allocations.
 			 */
-			metaslab_class_remove(spa->spa_log_class, mg);
+			metaslab_group_passivate(mg);
 			(void) spa_vdev_state_exit(spa, vd, 0);
 
 			error = vdev_offline_log(spa);
@@ -2139,7 +2203,7 @@ top:
 			 * Check to see if the config has changed.
 			 */
 			if (error || generation != spa->spa_config_generation) {
-				metaslab_class_add(spa->spa_log_class, mg);
+				metaslab_group_activate(mg);
 				if (error)
 					return (spa_vdev_state_exit(spa,
 					    vd, error));
@@ -2170,12 +2234,24 @@ top:
 		 * once we online the device it's open for business.
 		 */
 		if (tvd->vdev_islog && mg != NULL)
-			metaslab_class_add(spa->spa_log_class, mg);
+			metaslab_group_activate(mg);
 	}
 
 	vd->vdev_tmpoffline = !!(flags & ZFS_OFFLINE_TEMPORARY);
 
 	return (spa_vdev_state_exit(spa, vd, 0));
+}
+
+int
+vdev_offline(spa_t *spa, uint64_t guid, uint64_t flags)
+{
+	int error;
+
+	mutex_enter(&spa->spa_vdev_top_lock);
+	error = vdev_offline_locked(spa, guid, flags);
+	mutex_exit(&spa->spa_vdev_top_lock);
+
+	return (error);
 }
 
 /*
@@ -2209,11 +2285,20 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 	if (vd->vdev_faulted || vd->vdev_degraded ||
 	    !vdev_readable(vd) || !vdev_writeable(vd)) {
 
+		/*
+		 * When reopening in reponse to a clear event, it may be due to
+		 * a fmadm repair request.  In this case, if the device is
+		 * still broken, we want to still post the ereport again.
+		 */
+		vd->vdev_forcefault = B_TRUE;
+
 		vd->vdev_faulted = vd->vdev_degraded = 0;
 		vd->vdev_cant_read = B_FALSE;
 		vd->vdev_cant_write = B_FALSE;
 
 		vdev_reopen(vd);
+
+		vd->vdev_forcefault = B_FALSE;
 
 		if (vd != rvd)
 			vdev_state_dirty(vd->vdev_top);
@@ -2223,6 +2308,16 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 
 		spa_event_notify(spa, vd, ESC_ZFS_VDEV_CLEAR);
 	}
+
+	/*
+	 * When clearing a FMA-diagnosed fault, we always want to
+	 * unspare the device, as we assume that the original spare was
+	 * done in response to the FMA fault.
+	 */
+	if (!vdev_is_dead(vd) && vd->vdev_parent != NULL &&
+	    vd->vdev_parent->vdev_ops == &vdev_spare_ops &&
+	    vd->vdev_parent->vdev_child[0] == vd)
+		vd->vdev_unspare = B_TRUE;
 }
 
 boolean_t
@@ -2424,14 +2519,17 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 
 	if (type == ZIO_TYPE_WRITE && txg != 0 &&
 	    (!(flags & ZIO_FLAG_IO_REPAIR) ||
-	    (flags & ZIO_FLAG_SCRUB_THREAD))) {
+	    (flags & ZIO_FLAG_SCRUB_THREAD) ||
+	    spa->spa_claiming)) {
 		/*
-		 * This is either a normal write (not a repair), or it's a
-		 * repair induced by the scrub thread.  In the normal case,
-		 * we commit the DTL change in the same txg as the block
-		 * was born.  In the scrub-induced repair case, we know that
-		 * scrubs run in first-pass syncing context, so we commit
-		 * the DTL change in spa->spa_syncing_txg.
+		 * This is either a normal write (not a repair), or it's
+		 * a repair induced by the scrub thread, or it's a repair
+		 * made by zil_claim() during spa_load() in the first txg.
+		 * In the normal case, we commit the DTL change in the same
+		 * txg as the block was born.  In the scrub-induced repair
+		 * case, we know that scrubs run in first-pass syncing context,
+		 * so we commit the DTL change in spa_syncing_txg(spa).
+		 * In the zil_claim() case, we commit in spa_first_txg(spa).
 		 *
 		 * We currently do not make DTL entries for failed spontaneous
 		 * self-healing writes triggered by normal (non-scrubbing)
@@ -2444,9 +2542,12 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
 				ASSERT(spa_sync_pass(spa) == 1);
 				vdev_dtl_dirty(vd, DTL_SCRUB, txg, 1);
-				commit_txg = spa->spa_syncing_txg;
+				commit_txg = spa_syncing_txg(spa);
+			} else if (spa->spa_claiming) {
+				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
+				commit_txg = spa_first_txg(spa);
 			}
-			ASSERT(commit_txg >= spa->spa_syncing_txg);
+			ASSERT(commit_txg >= spa_syncing_txg(spa));
 			if (vdev_dtl_contains(vd, DTL_MISSING, txg, 1))
 				return;
 			for (pvd = vd; pvd != rvd; pvd = pvd->vdev_parent)
@@ -2488,15 +2589,18 @@ vdev_scrub_stat_update(vdev_t *vd, pool_scrub_type_t type, boolean_t complete)
 }
 
 /*
- * Update the in-core space usage stats for this vdev and the root vdev.
+ * Update the in-core space usage stats for this vdev, its metaslab class,
+ * and the root vdev.
  */
 void
-vdev_space_update(vdev_t *vd, int64_t space_delta, int64_t alloc_delta,
-    boolean_t update_root)
+vdev_space_update(vdev_t *vd, int64_t alloc_delta, int64_t defer_delta,
+    int64_t space_delta)
 {
 	int64_t dspace_delta = space_delta;
 	spa_t *spa = vd->vdev_spa;
 	vdev_t *rvd = spa->spa_root_vdev;
+	metaslab_group_t *mg = vd->vdev_mg;
+	metaslab_class_t *mc = mg ? mg->mg_class : NULL;
 
 	ASSERT(vd == vd->vdev_top);
 
@@ -2512,27 +2616,25 @@ vdev_space_update(vdev_t *vd, int64_t space_delta, int64_t alloc_delta,
 	    vd->vdev_deflate_ratio;
 
 	mutex_enter(&vd->vdev_stat_lock);
-	vd->vdev_stat.vs_space += space_delta;
 	vd->vdev_stat.vs_alloc += alloc_delta;
+	vd->vdev_stat.vs_space += space_delta;
 	vd->vdev_stat.vs_dspace += dspace_delta;
 	mutex_exit(&vd->vdev_stat_lock);
 
-	if (update_root) {
+	if (mc == spa_normal_class(spa)) {
+		mutex_enter(&rvd->vdev_stat_lock);
+		rvd->vdev_stat.vs_alloc += alloc_delta;
+		rvd->vdev_stat.vs_space += space_delta;
+		rvd->vdev_stat.vs_dspace += dspace_delta;
+		mutex_exit(&rvd->vdev_stat_lock);
+	}
+
+	if (mc != NULL) {
 		ASSERT(rvd == vd->vdev_parent);
 		ASSERT(vd->vdev_ms_count != 0);
 
-		/*
-		 * Don't count non-normal (e.g. intent log) space as part of
-		 * the pool's capacity.
-		 */
-		if (vd->vdev_islog)
-			return;
-
-		mutex_enter(&rvd->vdev_stat_lock);
-		rvd->vdev_stat.vs_space += space_delta;
-		rvd->vdev_stat.vs_alloc += alloc_delta;
-		rvd->vdev_stat.vs_dspace += dspace_delta;
-		mutex_exit(&rvd->vdev_stat_lock);
+		metaslab_class_space_update(mc,
+		    alloc_delta, defer_delta, space_delta, dspace_delta);
 	}
 }
 
@@ -2648,7 +2750,7 @@ vdev_state_dirty(vdev_t *vd)
 	    (dsl_pool_sync_context(spa_get_dsl(spa)) &&
 	    spa_config_held(spa, SCL_STATE, RW_READER)));
 
-	if (!list_link_active(&vd->vdev_state_dirty_node))
+	if (!list_link_active(&vd->vdev_state_dirty_node) && !vd->vdev_ishole)
 		list_insert_head(&spa->spa_state_dirty_list, vd);
 }
 
@@ -2759,6 +2861,19 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 	if (vdev_is_dead(vd) && vd->vdev_ops->vdev_op_leaf)
 		vd->vdev_ops->vdev_op_close(vd);
 
+	/*
+	 * If we have brought this vdev back into service, we need
+	 * to notify fmd so that it can gracefully repair any outstanding
+	 * cases due to a missing device.  We do this in all cases, even those
+	 * that probably don't correlate to a repaired fault.  This is sure to
+	 * catch all cases, and we let the zfs-retire agent sort it out.  If
+	 * this is a transient state it's OK, as the retire agent will
+	 * double-check the state of the vdev before repairing it.
+	 */
+	if (state == VDEV_STATE_HEALTHY && vd->vdev_ops->vdev_op_leaf &&
+	    vd->vdev_prevstate != state)
+		zfs_post_state_change(spa, vd);
+
 	if (vd->vdev_removed &&
 	    state == VDEV_STATE_CANT_OPEN &&
 	    (aux == VDEV_AUX_OPEN_FAILED || vd->vdev_checkremove)) {
@@ -2774,11 +2889,6 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 		vd->vdev_state = VDEV_STATE_REMOVED;
 		vd->vdev_stat.vs_aux = VDEV_AUX_NONE;
 	} else if (state == VDEV_STATE_REMOVED) {
-		/*
-		 * Indicate to the ZFS DE that this device has been removed, and
-		 * any recent errors should be ignored.
-		 */
-		zfs_post_remove(spa, vd);
 		vd->vdev_removed = B_TRUE;
 	} else if (state == VDEV_STATE_CANT_OPEN) {
 		/*

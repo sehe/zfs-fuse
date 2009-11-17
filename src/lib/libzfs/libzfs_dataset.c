@@ -816,9 +816,14 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 				goto error;
 			}
 
+			/*
+			 * Encode the prop name as
+			 * userquota@<hex-rid>-domain, to make it easy
+			 * for the kernel to decode.
+			 */
 			(void) snprintf(newpropname, sizeof (newpropname),
-			    "%s%s", zfs_userquota_prop_prefixes[uqtype],
-			    domain);
+			    "%s%llx-%s", zfs_userquota_prop_prefixes[uqtype],
+			    (longlong_t)rid, domain);
 			valary[0] = uqtype;
 			valary[1] = rid;
 			valary[2] = intval;
@@ -1817,8 +1822,9 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 	case ZFS_PROP_COMPRESSRATIO:
 		if (get_numeric_property(zhp, prop, src, &source, &val) != 0)
 			return (-1);
-		(void) snprintf(propbuf, proplen, "%lld.%02lldx", (longlong_t)
-		    val / 100, (longlong_t)val % 100);
+		(void) snprintf(propbuf, proplen, "%llu.%02llux",
+		    (u_longlong_t)(val / 100),
+		    (u_longlong_t)(val % 100));
 		break;
 
 	case ZFS_PROP_TYPE:
@@ -2252,6 +2258,8 @@ zfs_iter_filesystems(zfs_handle_t *zhp, zfs_iter_f func, void *data)
 			zcmd_free_nvlists(&zc);
 			return (ret);
 		}
+		// next child is allowed to use the full size !!!
+		zc.zc_nvlist_dst_size = 4096;
 	}
 	zcmd_free_nvlists(&zc);
 	return ((ret < 0) ? ret : 0);
@@ -3566,9 +3574,11 @@ zfs_prune_proplist(zfs_handle_t *zhp, uint8_t *props)
 		nvpair_t *next = nvlist_next_nvpair(zhp->zfs_props, curr);
 
 		/*
-		 * We leave user:props in the nvlist, so there will be
-		 * some ZPROP_INVAL.  To be extra safe, don't prune
-		 * those.
+		 * User properties will result in ZPROP_INVAL, and since we
+		 * only know how to prune standard ZFS properties, we always
+		 * leave these in the list.  This can also happen if we
+		 * encounter an unknown DSL property (when running older
+		 * software, for example).
 		 */
 		if (zfs_prop != ZPROP_INVAL && props[zfs_prop] == B_FALSE)
 			(void) nvlist_remove(zhp->zfs_props,
@@ -3720,6 +3730,14 @@ zfs_hold(zfs_handle_t *zhp, const char *snapname, const char *tag,
 		(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
 		    "cannot hold '%s@%s'"), zc.zc_name, snapname);
 		switch (errno) {
+		case E2BIG:
+			/*
+			 * Temporary tags wind up having the ds object id
+			 * prepended. So even if we passed the length check
+			 * above, it's still possible for the tag to wind
+			 * up being slightly too long.
+			 */
+			return (zfs_error(hdl, EZFS_TAGTOOLONG, errbuf));
 		case ENOTSUP:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "pool must be upgraded"));

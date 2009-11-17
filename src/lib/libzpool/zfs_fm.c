@@ -116,9 +116,11 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	char class[64];
 
 	/*
-	 * If we are doing a spa_tryimport(), ignore errors.
+	 * If we are doing a spa_tryimport() or in recovery mode,
+	 * ignore errors.
 	 */
-	if (spa->spa_load_state == SPA_LOAD_TRYIMPORT)
+	if (spa->spa_load_state == SPA_LOAD_TRYIMPORT ||
+	    spa->spa_load_state == SPA_LOAD_RECOVER)
 		return;
 
 	/*
@@ -347,6 +349,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 		    FM_EREPORT_PAYLOAD_ZFS_PREV_STATE,
 		    DATA_TYPE_UINT64, stateoroffset, NULL);
 	}
+
 	mutex_exit(&spa->spa_errlist_lock);
 
 	*ereport_out = ereport;
@@ -712,6 +715,7 @@ zfs_ereport_start_checksum(spa_t *spa, vdev_t *vd,
 		bcopy(info, report->zcr_ckinfo, sizeof (*info));
 	}
 
+	report->zcr_align = 1ULL << vd->vdev_top->vdev_ashift;
 	report->zcr_length = length;
 
 #ifdef _KERNEL
@@ -871,4 +875,16 @@ void
 zfs_post_autoreplace(spa_t *spa, vdev_t *vd)
 {
 	zfs_post_common(spa, vd, FM_RESOURCE_AUTOREPLACE);
+}
+
+/*
+ * The 'resource.fs.zfs.statechange' event is an internal signal that the
+ * given vdev has transitioned its state to DEGRADED or HEALTHY.  This will
+ * cause the retire agent to repair any outstanding fault management cases
+ * open because the device was not found (fault.fs.zfs.device).
+ */
+void
+zfs_post_state_change(spa_t *spa, vdev_t *vd)
+{
+	zfs_post_common(spa, vd, FM_RESOURCE_STATECHANGE);
 }
