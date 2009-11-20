@@ -39,6 +39,9 @@ extern "C" {
 #define	TXG_INITIAL		TXG_SIZE	/* initial txg 		*/
 #define	TXG_IDX			(txg & TXG_MASK)
 
+/* Number of txgs worth of frees we defer adding to in-core spacemaps */
+#define	TXG_DEFER_SIZE		2
+
 #define	TXG_WAIT		1ULL
 #define	TXG_NOWAIT		2ULL
 
@@ -70,8 +73,6 @@ extern uint64_t txg_hold_open(struct dsl_pool *dp, txg_handle_t *txghp);
 extern void txg_rele_to_quiesce(txg_handle_t *txghp);
 extern void txg_rele_to_sync(txg_handle_t *txghp);
 extern void txg_register_callbacks(txg_handle_t *txghp, list_t *tx_callbacks);
-extern void txg_suspend(struct dsl_pool *dp);
-extern void txg_resume(struct dsl_pool *dp);
 
 /*
  * Delay the caller by the specified number of ticks or until

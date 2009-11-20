@@ -119,6 +119,7 @@ typedef enum {
 	ZFS_PROP_LOGBIAS,
 	ZFS_PROP_UNIQUE,		/* not exposed to the user */
 	ZFS_PROP_OBJSETID,		/* not exposed to the user */
+	ZFS_PROP_DEDUP,
 	ZFS_NUM_PROPS
 } zfs_prop_t;
 
@@ -141,8 +142,6 @@ extern const char *zfs_userquota_prop_prefixes[ZFS_NUM_USERQUOTA_PROPS];
 typedef enum {
 	ZPOOL_PROP_NAME,
 	ZPOOL_PROP_SIZE,
-	ZPOOL_PROP_USED,
-	ZPOOL_PROP_AVAILABLE,
 	ZPOOL_PROP_CAPACITY,
 	ZPOOL_PROP_ALTROOT,
 	ZPOOL_PROP_HEALTH,
@@ -155,6 +154,10 @@ typedef enum {
 	ZPOOL_PROP_FAILUREMODE,
 	ZPOOL_PROP_LISTSNAPS,
 	ZPOOL_PROP_AUTOEXPAND,
+	ZPOOL_PROP_DEDUPDITTO,
+	ZPOOL_PROP_DEDUPRATIO,
+	ZPOOL_PROP_FREE,
+	ZPOOL_PROP_ALLOCATED,
 	ZPOOL_NUM_PROPS
 } zpool_prop_t;
 
@@ -197,6 +200,7 @@ boolean_t zfs_prop_user(const char *);
 boolean_t zfs_prop_userquota(const char *name);
 int zfs_prop_index_to_string(zfs_prop_t, uint64_t, const char **);
 int zfs_prop_string_to_index(zfs_prop_t, const char *, uint64_t *);
+uint64_t zfs_prop_random_value(zfs_prop_t, uint64_t seed);
 boolean_t zfs_prop_valid_for_type(int, zfs_type_t);
 
 /*
@@ -209,6 +213,7 @@ uint64_t zpool_prop_default_numeric(zpool_prop_t);
 boolean_t zpool_prop_readonly(zpool_prop_t);
 int zpool_prop_index_to_string(zpool_prop_t, uint64_t, const char **);
 int zpool_prop_string_to_index(zpool_prop_t, const char *, uint64_t *);
+uint64_t zpool_prop_random_value(zpool_prop_t, uint64_t seed);
 
 /*
  * Definitions for the Delegation.
@@ -296,14 +301,16 @@ typedef enum zfs_cache_type {
 #define	SPA_VERSION_17			17ULL
 #define	SPA_VERSION_18			18ULL
 #define	SPA_VERSION_19			19ULL
+#define	SPA_VERSION_20			20ULL
+#define	SPA_VERSION_21			21ULL
 /*
  * When bumping up SPA_VERSION, make sure GRUB ZFS understands the on-disk
  * format change. Go to usr/src/grub/grub-0.97/stage2/{zfs-include/, fsys_zfs*},
  * and do the appropriate changes.  Also bump the version number in
  * usr/src/grub/capability.
  */
-#define	SPA_VERSION			SPA_VERSION_19
-#define	SPA_VERSION_STRING		"19"
+#define	SPA_VERSION			SPA_VERSION_21
+#define	SPA_VERSION_STRING		"21"
 
 /*
  * Symbolic names for the changes that caused a SPA_VERSION switch.
@@ -344,6 +351,8 @@ typedef enum zfs_cache_type {
 #define	SPA_VERSION_RAIDZ3		SPA_VERSION_17
 #define	SPA_VERSION_USERREFS		SPA_VERSION_18
 #define	SPA_VERSION_HOLES		SPA_VERSION_19
+#define	SPA_VERSION_ZLE_COMPRESSION	SPA_VERSION_20
+#define	SPA_VERSION_DEDUP		SPA_VERSION_21
 
 /*
  * ZPL version - rev'd whenever an incompatible on-disk format change
@@ -366,6 +375,20 @@ typedef enum zfs_cache_type {
 #define	ZPL_VERSION_NORMALIZATION	ZPL_VERSION_3
 #define	ZPL_VERSION_SYSATTR		ZPL_VERSION_3
 #define	ZPL_VERSION_USERSPACE		ZPL_VERSION_4
+
+/* Rewind request information */
+#define	ZPOOL_NO_REWIND		0
+#define	ZPOOL_TRY_REWIND	1 /* Search for best txg, but do not rewind */
+#define	ZPOOL_DO_REWIND		2 /* Rewind to best txg w/in deferred frees */
+#define	ZPOOL_EXTREME_REWIND	4 /* Allow extreme measures to find best txg */
+#define	ZPOOL_REWIND_MASK	7 /* All the possible policy bits */
+
+typedef struct zpool_rewind_policy {
+	uint32_t	zrp_request;	/* rewind behavior requested */
+	uint32_t	zrp_maxmeta;	/* max acceptable meta-data errors */
+	uint32_t	zrp_maxdata;	/* max acceptable data errors */
+	uint64_t	zrp_txg;	/* specific txg to load */
+} zpool_rewind_policy_t;
 
 /*
  * The following are configuration names used in the nvlist describing a pool's
@@ -419,6 +442,19 @@ typedef enum zfs_cache_type {
 #define	ZPOOL_CONFIG_DEGRADED		"degraded"
 #define	ZPOOL_CONFIG_REMOVED		"removed"
 #define	ZPOOL_CONFIG_FRU		"fru"
+#define	ZPOOL_CONFIG_AUX_STATE		"aux_state"
+
+/* Rewind policy parameters */
+#define	ZPOOL_REWIND_POLICY		"rewind-policy"
+#define	ZPOOL_REWIND_REQUEST		"rewind-request"
+#define	ZPOOL_REWIND_REQUEST_TXG	"rewind-request-txg"
+#define	ZPOOL_REWIND_META_THRESH	"rewind-meta-thresh"
+#define	ZPOOL_REWIND_DATA_THRESH	"rewind-data-thresh"
+
+/* Rewind data discovered */
+#define	ZPOOL_CONFIG_LOAD_TIME		"rewind_txg_ts"
+#define	ZPOOL_CONFIG_LOAD_DATA_ERRORS	"verify_data_errors"
+#define	ZPOOL_CONFIG_REWIND_TIME	"seconds_of_rewind"
 
 #define	VDEV_TYPE_ROOT			"root"
 #define	VDEV_TYPE_MIRROR		"mirror"
@@ -441,7 +477,7 @@ typedef enum zfs_cache_type {
  * The location of the pool configuration repository, shared between kernel and
  * userland.
  */
-#define	ZPOOL_CACHE_DIR		"/etc/zfs"
+#define	ZPOOL_CACHE_DIR		"/var/lib/zfs"
 #define	ZPOOL_CACHE		ZPOOL_CACHE_DIR "/zpool.cache"
 
 /*
@@ -478,7 +514,8 @@ typedef enum vdev_aux {
 	VDEV_AUX_SPARED,	/* hot spare used in another pool	*/
 	VDEV_AUX_ERR_EXCEEDED,	/* too many errors			*/
 	VDEV_AUX_IO_FAILURE,	/* experienced I/O failure		*/
-	VDEV_AUX_BAD_LOG	/* cannot read log chain(s)		*/
+	VDEV_AUX_BAD_LOG,	/* cannot read log chain(s)		*/
+	VDEV_AUX_EXTERNAL	/* external diagnosis			*/
 } vdev_aux_t;
 
 /*
@@ -635,7 +672,8 @@ typedef enum {
 	SPA_LOAD_NONE,		/* no load in progress */
 	SPA_LOAD_OPEN,		/* normal open */
 	SPA_LOAD_IMPORT,	/* import in progress */
-	SPA_LOAD_TRYIMPORT	/* tryimport in progress */
+	SPA_LOAD_TRYIMPORT,	/* tryimport in progress */
+	SPA_LOAD_RECOVER	/* recovery requested */
 } spa_load_state_t;
 
 /*

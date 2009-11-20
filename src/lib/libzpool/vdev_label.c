@@ -320,6 +320,8 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 		kmem_free(child, vd->vdev_children * sizeof (nvlist_t *));
 
 	} else {
+		const char *aux = NULL;
+
 		if (vd->vdev_offline && !vd->vdev_tmpoffline)
 			VERIFY(nvlist_add_uint64(nv, ZPOOL_CONFIG_OFFLINE,
 			    B_TRUE) == 0);
@@ -338,6 +340,20 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 		if (vd->vdev_ishole)
 			VERIFY(nvlist_add_uint64(nv, ZPOOL_CONFIG_IS_HOLE,
 			    B_TRUE) == 0);
+
+		switch (vd->vdev_stat.vs_aux) {
+		case VDEV_AUX_ERR_EXCEEDED:
+			aux = "err_exceeded";
+			break;
+
+		case VDEV_AUX_EXTERNAL:
+			aux = "external";
+			break;
+		}
+
+		if (aux != NULL)
+			VERIFY(nvlist_add_string(nv, ZPOOL_CONFIG_AUX_STATE,
+			    aux) == 0);
 	}
 
 	return (nv);
@@ -766,11 +782,6 @@ retry:
  */
 
 /*
- * For use by zdb and debugging purposes only
- */
-uint64_t ub_max_txg = UINT64_MAX;
-
-/*
  * Consider the following situation: txg is safely synced to disk.  We've
  * written the first uberblock for txg + 1, and then we lose power.  When we
  * come back up, we fail to see the uberblock for txg + 1 because, say,
@@ -799,6 +810,7 @@ vdev_uberblock_compare(uberblock_t *ub1, uberblock_t *ub2)
 static void
 vdev_uberblock_load_done(zio_t *zio)
 {
+	spa_t *spa = zio->io_spa;
 	zio_t *rio = zio->io_private;
 	uberblock_t *ub = zio->io_data;
 	uberblock_t *ubbest = rio->io_private;
@@ -807,7 +819,7 @@ vdev_uberblock_load_done(zio_t *zio)
 
 	if (zio->io_error == 0 && uberblock_verify(ub) == 0) {
 		mutex_enter(&rio->io_lock);
-		if (ub->ub_txg <= ub_max_txg &&
+		if (ub->ub_txg <= spa->spa_load_max_txg &&
 		    vdev_uberblock_compare(ub, ubbest) > 0)
 			*ubbest = *ub;
 		mutex_exit(&rio->io_lock);

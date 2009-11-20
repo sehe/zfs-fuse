@@ -74,16 +74,18 @@ zpool_prop_init(void)
 	/* readonly number properties */
 	register_number(ZPOOL_PROP_SIZE, "size", 0, PROP_READONLY,
 	    ZFS_TYPE_POOL, "<size>", "SIZE");
-	register_number(ZPOOL_PROP_USED, "used", 0, PROP_READONLY,
-	    ZFS_TYPE_POOL, "<size>", "USED");
-	register_number(ZPOOL_PROP_AVAILABLE, "available", 0, PROP_READONLY,
-	    ZFS_TYPE_POOL, "<size>", "AVAIL");
+	register_number(ZPOOL_PROP_FREE, "free", 0, PROP_READONLY,
+	    ZFS_TYPE_POOL, "<size>", "FREE");
+	register_number(ZPOOL_PROP_ALLOCATED, "allocated", 0, PROP_READONLY,
+	    ZFS_TYPE_POOL, "<size>", "ALLOC");
 	register_number(ZPOOL_PROP_CAPACITY, "capacity", 0, PROP_READONLY,
 	    ZFS_TYPE_POOL, "<size>", "CAP");
 	register_number(ZPOOL_PROP_GUID, "guid", 0, PROP_READONLY,
 	    ZFS_TYPE_POOL, "<guid>", "GUID");
 	register_number(ZPOOL_PROP_HEALTH, "health", 0, PROP_READONLY,
 	    ZFS_TYPE_POOL, "<state>", "HEALTH");
+	register_number(ZPOOL_PROP_DEDUPRATIO, "dedupratio", 0, PROP_READONLY,
+	    ZFS_TYPE_POOL, "<1.00x or higher if deduped>", "DEDUP");
 
 	/* default number properties */
 	register_number(ZPOOL_PROP_VERSION, "version", SPA_VERSION,
@@ -107,6 +109,8 @@ zpool_prop_init(void)
 	/* hidden properties */
 	register_hidden(ZPOOL_PROP_NAME, "name", PROP_TYPE_STRING,
 	    PROP_READONLY, ZFS_TYPE_POOL, "NAME");
+	register_hidden(ZPOOL_PROP_DEDUPDITTO, "dedupditto", PROP_TYPE_NUMBER,
+	    PROP_READONLY, ZFS_TYPE_POOL, "DEDUPDITTO");
 }
 
 /*
@@ -164,6 +168,12 @@ zpool_prop_index_to_string(zpool_prop_t prop, uint64_t index,
     const char **string)
 {
 	return (zprop_index_to_string(prop, index, string, ZFS_TYPE_POOL));
+}
+
+uint64_t
+zpool_prop_random_value(zpool_prop_t prop, uint64_t seed)
+{
+	return (zprop_random_value(prop, seed, ZFS_TYPE_POOL));
 }
 
 #ifndef _KERNEL

@@ -216,7 +216,7 @@ extern int zpool_add(zpool_handle_t *, nvlist_t *);
  * Functions to manipulate pool and vdev state
  */
 extern int zpool_scrub(zpool_handle_t *, pool_scrub_type_t);
-extern int zpool_clear(zpool_handle_t *, const char *);
+extern int zpool_clear(zpool_handle_t *, const char *, nvlist_t *);
 
 extern int zpool_vdev_online(zpool_handle_t *, const char *, int,
     vdev_state_t *);
@@ -226,8 +226,8 @@ extern int zpool_vdev_attach(zpool_handle_t *, const char *,
 extern int zpool_vdev_detach(zpool_handle_t *, const char *);
 extern int zpool_vdev_remove(zpool_handle_t *, const char *);
 
-extern int zpool_vdev_fault(zpool_handle_t *, uint64_t);
-extern int zpool_vdev_degrade(zpool_handle_t *, uint64_t);
+extern int zpool_vdev_fault(zpool_handle_t *, uint64_t, vdev_aux_t);
+extern int zpool_vdev_degrade(zpool_handle_t *, uint64_t, vdev_aux_t);
 extern int zpool_vdev_clear(zpool_handle_t *, uint64_t);
 
 extern nvlist_t *zpool_find_vdev(zpool_handle_t *, const char *, boolean_t *,
@@ -347,6 +347,8 @@ extern void zpool_obj_to_path(zpool_handle_t *, uint64_t, uint64_t, char *,
     size_t len);
 extern int zfs_ioctl(libzfs_handle_t *, int, struct zfs_cmd *);
 extern int zpool_get_physpath(zpool_handle_t *, char *, size_t);
+extern void zpool_explain_recover(libzfs_handle_t *, const char *, int,
+    nvlist_t *);
 
 /*
  * Basic handle manipulations.  These functions do not create or destroy the
@@ -581,9 +583,10 @@ extern int zpool_in_use(libzfs_handle_t *, int, pool_state_t *, char **,
     boolean_t *);
 
 /*
- * ftyp special.  Read the label from a given device.
+ * Label manipulation.
  */
 extern int zpool_read_label(int, nvlist_t **);
+extern int zpool_clear_label(int);
 
 /* is this zvol valid for use as a dump device? */
 extern int zvol_check_dump_config(char *);
@@ -603,6 +606,17 @@ int zfs_smb_acl_rename(libzfs_handle_t *, char *, char *, char *, char *);
  */
 extern int zpool_enable_datasets(zpool_handle_t *, const char *, int);
 extern int zpool_disable_datasets(zpool_handle_t *, boolean_t);
+
+/*
+ * Mappings between vdev and FRU.
+ */
+extern void libzfs_fru_refresh(libzfs_handle_t *);
+extern const char *libzfs_fru_lookup(libzfs_handle_t *, const char *);
+extern const char *libzfs_fru_devpath(libzfs_handle_t *, const char *);
+extern boolean_t libzfs_fru_compare(libzfs_handle_t *, const char *,
+    const char *);
+extern boolean_t libzfs_fru_notself(libzfs_handle_t *, const char *);
+extern int zpool_fru_set(zpool_handle_t *, uint64_t, const char *);
 
 #ifdef	__cplusplus
 }

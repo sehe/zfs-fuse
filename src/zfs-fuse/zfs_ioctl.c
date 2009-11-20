@@ -42,7 +42,6 @@
 #include <sys/spa.h>
 #include <sys/spa_impl.h>
 #include <sys/vdev.h>
-#include <sys/vdev_impl.h>
 #include <sys/dmu.h>
 #include <sys/dsl_dir.h>
 #include <sys/dsl_dataset.h>
@@ -183,7 +182,7 @@ zfs_is_bootfs(const char *name)
 
 	if (dmu_objset_hold(name, FTAG, &os) == 0) {
 		boolean_t ret;
-		ret = (dmu_objset_id(os) == dmu_objset_spa(os)->spa_bootfs);
+		ret = (dmu_objset_id(os) == spa_bootfs(dmu_objset_spa(os)));
 		dmu_objset_rele(os, FTAG);
 		return (ret);
 	}
@@ -816,25 +815,7 @@ put_nvlist(zfs_cmd_t *zc, nvlist_t *nvl)
 		  syslog(LOG_WARNING,"put_nvlist: error %s on xcopyout",strerror(error));
 	}
 
-	/* This size update is rather tricky.
-	 * The original code was updating it always but if you do so the size
-	 * becomes too small for some inherited attributes and some filesystems
-	 * disappear from zfs list and are not mounted by zfs mount -a
-	 * On the other hand if you never update it and you get some problem on
-	 * a raidz1 pool (unavailable disk), you get an infinite loop on this
-	 * function, always calling with the same size.
-	 * So this hack tries to address the raidz1 problem : it stores the last
-	 * size received, and if it's the same then it stores it.
-	 * Luckily the size seems to always be different except in case of loop
-	 * like what happens in the raidz1 case.
-	 * TODO : make a real fix here instead of this hack (when enough time
-	 * and motivation is available !) */
-	static int last_size;
-	if (size == last_size)
-		zc->zc_nvlist_dst_size = size;
-	else {
-		last_size = size;
-	}
+	zc->zc_nvlist_dst_size = size;
 	return (error);
 }
 
@@ -987,9 +968,9 @@ zfs_ioc_pool_destroy(zfs_cmd_t *zc)
 static int
 zfs_ioc_pool_import(zfs_cmd_t *zc)
 {
-	int error;
 	nvlist_t *config, *props = NULL;
 	uint64_t guid;
+	int error;
 
 	if ((error = get_nvlist(zc->zc_nvlist_conf, zc->zc_nvlist_conf_size,
 	    zc->zc_iflags, &config)) != 0)
@@ -1006,10 +987,12 @@ zfs_ioc_pool_import(zfs_cmd_t *zc)
 	    guid != zc->zc_guid)
 		error = EINVAL;
 	else if (zc->zc_cookie)
-		error = spa_import_verbatim(zc->zc_name, config,
-		    props);
+		error = spa_import_verbatim(zc->zc_name, config, props);
 	else
 		error = spa_import(zc->zc_name, config, props);
+
+	if (zc->zc_nvlist_dst != 0)
+		(void) put_nvlist(zc, config);
 
 	nvlist_free(config);
 
@@ -1254,7 +1237,7 @@ zfs_ioc_vdev_add(zfs_cmd_t *zc)
 	 *
 	 * l2cache and spare devices are ok to be added to a rootpool.
 	 */
-	if (spa->spa_bootfs != 0 && nl2cache == 0 && nspares == 0) {
+	if (spa_bootfs(spa) != 0 && nl2cache == 0 && nspares == 0) {
 		spa_close(spa, FTAG);
 		return (EDOM);
 	}
@@ -1284,16 +1267,12 @@ zfs_ioc_vdev_remove(zfs_cmd_t *zc)
 static int
 zfs_ioc_vdev_set_state(zfs_cmd_t *zc)
 {
-	boolean_t nslock;
 	spa_t *spa;
 	int error;
 	vdev_state_t newstate = VDEV_STATE_UNKNOWN;
 
 	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
 		return (error);
-	nslock = spa_uses_zvols(spa);
-	if (nslock)
-		mutex_enter(&spa_namespace_lock);
 	switch (zc->zc_cookie) {
 	case VDEV_STATE_ONLINE:
 		error = vdev_online(spa, zc->zc_guid, zc->zc_obj, &newstate);
@@ -1304,18 +1283,24 @@ zfs_ioc_vdev_set_state(zfs_cmd_t *zc)
 		break;
 
 	case VDEV_STATE_FAULTED:
-		error = vdev_fault(spa, zc->zc_guid);
+		if (zc->zc_obj != VDEV_AUX_ERR_EXCEEDED &&
+		    zc->zc_obj != VDEV_AUX_EXTERNAL)
+			zc->zc_obj = VDEV_AUX_ERR_EXCEEDED;
+
+		error = vdev_fault(spa, zc->zc_guid, zc->zc_obj);
 		break;
 
 	case VDEV_STATE_DEGRADED:
-		error = vdev_degrade(spa, zc->zc_guid);
+		if (zc->zc_obj != VDEV_AUX_ERR_EXCEEDED &&
+		    zc->zc_obj != VDEV_AUX_EXTERNAL)
+			zc->zc_obj = VDEV_AUX_ERR_EXCEEDED;
+
+		error = vdev_degrade(spa, zc->zc_guid, zc->zc_obj);
 		break;
 
 	default:
 		error = EINVAL;
 	}
-	if (nslock)
-		mutex_exit(&spa_namespace_lock);
 	zc->zc_cookie = newstate;
 	spa_close(spa, FTAG);
 	return (error);
@@ -1698,6 +1683,11 @@ zfs_set_prop_nvlist(const char *name, nvlist_t *nvl)
 				    SPA_VERSION_GZIP_COMPRESSION))
 					return (ENOTSUP);
 
+				if (intval == ZIO_COMPRESS_ZLE &&
+				    zfs_earlier_version(name,
+				    SPA_VERSION_ZLE_COMPRESSION))
+					return (ENOTSUP);
+
 				/*
 				 * If this is a bootable dataset then
 				 * verify that the compression algorithm
@@ -1713,6 +1703,11 @@ zfs_set_prop_nvlist(const char *name, nvlist_t *nvl)
 
 		case ZFS_PROP_COPIES:
 			if (zfs_earlier_version(name, SPA_VERSION_DITTO_BLOCKS))
+				return (ENOTSUP);
+			break;
+
+		case ZFS_PROP_DEDUP:
+			if (zfs_earlier_version(name, SPA_VERSION_DEDUP))
 				return (ENOTSUP);
 			break;
 
@@ -1753,8 +1748,11 @@ zfs_set_prop_nvlist(const char *name, nvlist_t *nvl)
 				type = valary[0];
 				rid = valary[1];
 				quota = valary[2];
-				domain = propname +
-				    strlen(zfs_userquota_prop_prefixes[type]);
+				/*
+				 * The propname is encoded as
+				 * userquota@<rid>-<domain>.
+				 */
+				domain = strchr(propname, '-') + 1;
 
 				error = zfsvfs_hold(name, FTAG, &zfsvfs);
 				if (error == 0) {
@@ -1823,7 +1821,7 @@ zfs_set_prop_nvlist(const char *name, nvlist_t *nvl)
 				zfs_cmd_t zc = { 0 };
 				(void) strcpy(zc.zc_name, name);
 				(void) zfs_ioc_userspace_upgrade(&zc);
-			}			
+			}
 			if (error)
 				goto out;
 			break;
@@ -2381,7 +2379,7 @@ zfs_ioc_create(zfs_cmd_t *zc)
 	    strchr(zc->zc_name, '%'))
 		return (EINVAL);
 
-	if (zc->zc_nvlist_src != (uint64_t)(uintptr_t) NULL &&
+	if (zc->zc_nvlist_src != 0L &&
 	    (error = get_nvlist(zc->zc_nvlist_src, zc->zc_nvlist_src_size,
 	    zc->zc_iflags, &nvprops)) != 0)
 		return (error);
@@ -3020,13 +3018,35 @@ zfs_ioc_clear(zfs_cmd_t *zc)
 		mutex_exit(&spa_namespace_lock);
 		return (EIO);
 	}
-	if (spa->spa_log_state == SPA_LOG_MISSING) {
+	if (spa_get_log_state(spa) == SPA_LOG_MISSING) {
 		/* we need to let spa_open/spa_load clear the chains */
-		spa->spa_log_state = SPA_LOG_CLEAR;
+		spa_set_log_state(spa, SPA_LOG_CLEAR);
 	}
+	spa->spa_last_open_failed = 0;
 	mutex_exit(&spa_namespace_lock);
 
-	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
+	if (zc->zc_cookie == ZPOOL_NO_REWIND) {
+		error = spa_open(zc->zc_name, &spa, FTAG);
+	} else {
+		nvlist_t *policy;
+		nvlist_t *config = NULL;
+
+		if (zc->zc_nvlist_src == 0L)
+			return (EINVAL);
+
+		if ((error = get_nvlist(zc->zc_nvlist_src,
+		    zc->zc_nvlist_src_size, zc->zc_iflags, &policy)) == 0) {
+			error = spa_open_rewind(zc->zc_name, &spa, FTAG,
+			    policy, &config);
+			if (config != NULL) {
+				(void) put_nvlist(zc, config);
+				nvlist_free(config);
+			}
+			nvlist_free(policy);
+		}
+	}
+
+	if (error)
 		return (error);
 
 	spa_vdev_state_enter(spa, SCL_NONE);

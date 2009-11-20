@@ -32,6 +32,7 @@
 #include <sys/dsl_synctask.h>
 #include <sys/dsl_deleg.h>
 #include <sys/spa.h>
+#include <sys/metaslab.h>
 #include <sys/zap.h>
 #include <sys/zio.h>
 #include <sys/arc.h>
@@ -650,7 +651,7 @@ dsl_dir_space_available(dsl_dir_t *dd,
 		 * dsl_pool_adjustedsize()), something is very
 		 * wrong.
 		 */
-		ASSERT3U(used, <=, spa_get_space(dd->dd_pool->dp_spa));
+		ASSERT3U(used, <=, spa_get_dspace(dd->dd_pool->dp_spa));
 	} else {
 		/*
 		 * the lesser of the space provided by our parent and
@@ -678,8 +679,9 @@ dsl_dir_tempreserve_impl(dsl_dir_t *dd, uint64_t asize, boolean_t netfree,
 {
 	uint64_t txg = tx->tx_txg;
 	uint64_t est_inflight, used_on_disk, quota, parent_rsrv;
+	uint64_t deferred = 0;
 	struct tempreserve *tr;
-	int enospc = EDQUOT;
+	int retval = EDQUOT;
 	int txgidx = txg & TXG_MASK;
 	int i;
 	uint64_t ref_rsrv = 0;
@@ -725,7 +727,8 @@ dsl_dir_tempreserve_impl(dsl_dir_t *dd, uint64_t asize, boolean_t netfree,
 		quota = dd->dd_phys->dd_quota;
 
 	/*
-	 * Adjust the quota against the actual pool size at the root.
+	 * Adjust the quota against the actual pool size at the root
+	 * minus any outstanding deferred frees.
 	 * To ensure that it's possible to remove files from a full
 	 * pool without inducing transient overcommits, we throttle
 	 * netfree transactions against a quota that is slightly larger,
@@ -734,10 +737,12 @@ dsl_dir_tempreserve_impl(dsl_dir_t *dd, uint64_t asize, boolean_t netfree,
 	 * removes to get through.
 	 */
 	if (dd->dd_parent == NULL) {
+		spa_t *spa = dd->dd_pool->dp_spa;
 		uint64_t poolsize = dsl_pool_adjustedsize(dd->dd_pool, netfree);
-		if (poolsize < quota) {
-			quota = poolsize;
-			enospc = ENOSPC;
+		deferred = metaslab_class_get_deferred(spa_normal_class(spa));
+		if (poolsize - deferred < quota) {
+			quota = poolsize - deferred;
+			retval = ENOSPC;
 		}
 	}
 
@@ -747,15 +752,16 @@ dsl_dir_tempreserve_impl(dsl_dir_t *dd, uint64_t asize, boolean_t netfree,
 	 * on-disk is over quota and there are no pending changes (which
 	 * may free up space for us).
 	 */
-	if (used_on_disk + est_inflight > quota) {
-		if (est_inflight > 0 || used_on_disk < quota)
-			enospc = ERESTART;
+	if (used_on_disk + est_inflight >= quota) {
+		if (est_inflight > 0 || used_on_disk < quota ||
+		    (retval == ENOSPC && used_on_disk < quota + deferred))
+			retval = ERESTART;
 		dprintf_dd(dd, "failing: used=%lluK inflight = %lluK "
 		    "quota=%lluK tr=%lluK err=%d\n",
 		    used_on_disk>>10, est_inflight>>10,
-		    quota>>10, asize>>10, enospc);
+		    quota>>10, asize>>10, retval);
 		mutex_exit(&dd->dd_lock);
-		return (enospc);
+		return (retval);
 	}
 
 	/* We need to up our estimated delta before dropping dd_lock */
