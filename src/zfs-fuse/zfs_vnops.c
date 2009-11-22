@@ -1030,6 +1030,7 @@ zfs_access(vnode_t *vp, int mode, int flag, cred_t *cr,
 {
 	znode_t *zp = VTOZ(vp);
 	zfsvfs_t *zfsvfs = zp->z_zfsvfs;
+	int error;
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
