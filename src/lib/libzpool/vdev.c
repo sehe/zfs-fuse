@@ -1363,7 +1363,10 @@ vdev_close(vdev_t *vd)
 	ASSERT(spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
 
 	if (pvd != NULL && pvd->vdev_reopening)
-		vd->vdev_reopening = pvd->vdev_reopening;
+    {
+        // avoid reopening the vdev if it should go offline anyway
+		vd->vdev_reopening = vd->vdev_offline? B_FALSE : pvd->vdev_reopening;
+    }
 
 	vd->vdev_ops->vdev_op_close(vd);
 
