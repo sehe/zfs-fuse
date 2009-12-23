@@ -11,3 +11,5 @@ src/cmd/zfs/zfs
 src/cmd/zpool/zpool
 src/cmd/ztest/ztest
 
+cscope.out
+tags
