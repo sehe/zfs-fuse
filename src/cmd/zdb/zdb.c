@@ -1314,7 +1314,7 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 	dnode_t *dn;
 	void *bonus = NULL;
 	size_t bsize = 0;
-	char iblk[6], dblk[6], lsize[6], asize[6], bonus_size[6], fill[7];
+	char iblk[6], dblk[6], lsize[6], asize[6], bonus_size[6], fill[8];
 	char aux[50];
 	int error;
 
@@ -1343,7 +1343,7 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 	nicenum(doi.doi_max_offset, lsize);
 	nicenum(doi.doi_physical_blocks_512 << 9, asize);
 	nicenum(doi.doi_bonus_size, bonus_size);
-	(void) sprintf(fill, "%6.2f", 100.0 * doi.doi_fill_count *
+	(void) sprintf(fill, "%7.2f", 100.0 * doi.doi_fill_count *
 	    doi.doi_data_block_size / doi.doi_max_offset);
 
 	aux[0] = '\0';
