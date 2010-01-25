@@ -26,9 +26,9 @@ else:
 	if debug == 1:
 		env.Append(CCFLAGS = ['-O2'])
 	elif debug == 2:
-		env.Append(CCFLAGS = ['-DDEBUG'])
+		env.Append(CCFLAGS = Split('-O0 -DDEBUG'))
 	elif debug == 3:
-		env.Append(CCFLAGS = Split('-finstrument-functions -DDEBUG'))
+		env.Append(CCFLAGS = Split('-finstrument-functions -O0 -DDEBUG'))
 
 env['CPPPATH'] = []
 
