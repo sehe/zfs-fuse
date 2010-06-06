@@ -640,7 +640,7 @@ zfsctl_create(zfsvfs_t *zfsvfs)
 
 	znode_t *znode;
 
-	int error = zfs_zget(zfsvfs, 3, &znode);
+	int error = zfs_zget(zfsvfs, 3, &znode, B_FALSE);
 	if(error) {
 	    ZFS_EXIT(zfsvfs);
 	    return;
