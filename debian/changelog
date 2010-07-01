@@ -1,3 +1,11 @@
+zfs-fuse (0.6.9-7~2.gbp3a2e2c) UNRELEASED; urgency=low
+
+  ** SNAPSHOT build @3a2e2c6fb9506caaa3d8fef7b4213c72780b29f9 **
+
+  * Revert "Disabling the use of keep_cache in zfsfuse_opencreate"
+
+ -- Seth Heeren <zfs-fuse@sehe.nl>  Thu, 01 Jul 2010 12:21:37 +0200
+
 zfs-fuse (0.6.9-7~1.gbp52ec03) lucid; urgency=low
 
   ** SNAPSHOT build @52ec037ffa41128d6c70f5b3baed9fdfc26f9fea **
