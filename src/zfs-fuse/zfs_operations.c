@@ -238,11 +238,6 @@ static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
         VOID_ERROR(error);
 }
 
-static void zfsfuse_getattr_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-	zfsfuse_getattr(req, ino, fi);
-}
-
 /* This macro makes the lookup for the xattr directory, necessary for listxattr
  * getxattr and setxattr */
 #define MY_LOOKUP_XATTR() \
@@ -557,11 +552,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_lookup_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
-{
-	zfsfuse_lookup(req, parent, name);
-}
-
 static void zfsfuse_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
@@ -633,11 +623,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_opendir_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-	zfsfuse_opendir(req, ino, fi);
-}
-
 static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
@@ -667,11 +652,6 @@ static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 
     /* Release events always reply_err */
     VOID_ERROR(error);
-}
-
-static void zfsfuse_release_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-	zfsfuse_release(req, ino, fi);
 }
 
 static void zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
@@ -762,11 +742,6 @@ out:
 
     if (error)
         VOID_ERROR(error);
-}
-
-static void zfsfuse_readdir_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
-{
-	zfsfuse_readdir(req, ino, size, off, fi);
 }
 
 static void zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, int fflags, mode_t createmode, const char *name)
@@ -1022,11 +997,6 @@ static void zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
         VOID_ERROR(error);
 }
 
-static void zfsfuse_readlink_helper(fuse_req_t req, fuse_ino_t ino)
-{
-	zfsfuse_readlink(req, ino);
-}
-
 static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
@@ -1074,11 +1044,6 @@ static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
     if (error)
         VOID_ERROR(error);
-}
-
-static void zfsfuse_read_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
-{
-	zfsfuse_read(req, ino, size, off, fi);
 }
 
 static void zfsfuse_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
@@ -1150,11 +1115,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_mkdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
-{
-	zfsfuse_mkdir(req, parent, name, mode);
-}
-
 static void zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
@@ -1197,11 +1157,6 @@ static void zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 
     /* rmdir events always reply_err */
     VOID_ERROR(error);
-}
-
-static void zfsfuse_rmdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
-{
-	zfsfuse_rmdir(req, parent, name);
 }
 
 static void zfsfuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
@@ -1335,11 +1290,6 @@ out: ;
         VOID_ERROR(error);
 }
 
-static void zfsfuse_setattr_helper(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
-{
-	zfsfuse_setattr(req, ino, attr, to_set, fi);
-}
-
 static void zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
@@ -1376,11 +1326,6 @@ static void zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
     /* unlink events always reply_err */
     VOID_ERROR(error);
-}
-
-static void zfsfuse_unlink_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
-{
-	zfsfuse_unlink(req, parent, name);
 }
 
 static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
@@ -1427,11 +1372,6 @@ static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_
 
     if (error)
         VOID_ERROR(error);
-}
-
-static void zfsfuse_write_helper(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
-{
-	zfsfuse_write(req, ino, buf, size, off, fi);
 }
 
 static void zfsfuse_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
@@ -1511,11 +1451,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_mknod_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
-{
-	zfsfuse_mknod(req, parent, name, mode, rdev);
-}
-
 static void zfsfuse_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
@@ -1591,11 +1526,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_symlink_helper(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
-{
-	zfsfuse_symlink(req, link, parent, name);
-}
-
 static void zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
 {
 	if(strlen(name) >= MAXNAMELEN)
@@ -1653,11 +1583,6 @@ static void zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, 
     VOID_ERROR(error);
 }
 
-static void zfsfuse_rename_helper(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
-{
-	zfsfuse_rename(req, parent, name, newparent, newname);
-}
-
 static void zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
@@ -1683,11 +1608,6 @@ static void zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct f
 
     /* fsync events always reply_err */
     VOID_ERROR(error);
-}
-
-static void zfsfuse_fsync_helper(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
-{
-	zfsfuse_fsync(req, ino, datasync, fi);
 }
 
 static void zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
@@ -1774,11 +1694,6 @@ out:
         VOID_ERROR(error);
 }
 
-static void zfsfuse_link_helper(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
-{
-	zfsfuse_link(req, ino, newparent, newname);
-}
-
 static void zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
 {
     print_debug("function %s\n",__FUNCTION__);
@@ -1823,35 +1738,30 @@ static void zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
     VOID_ERROR(error);
 }
 
-static void zfsfuse_access_helper(fuse_req_t req, fuse_ino_t ino, int mask)
-{
-	zfsfuse_access(req, ino, mask);
-}
-
 struct fuse_lowlevel_ops zfs_operations =
 {
 	.open       = zfsfuse_open_helper,
-	.read       = zfsfuse_read_helper,
-	.write      = zfsfuse_write_helper,
-	.release    = zfsfuse_release_helper,
-	.opendir    = zfsfuse_opendir_helper,
-	.readdir    = zfsfuse_readdir_helper,
-	.releasedir = zfsfuse_release_helper,
-	.lookup     = zfsfuse_lookup_helper,
-	.getattr    = zfsfuse_getattr_helper,
-	.readlink   = zfsfuse_readlink_helper,
-	.mkdir      = zfsfuse_mkdir_helper,
-	.rmdir      = zfsfuse_rmdir_helper,
+	.read       = zfsfuse_read,
+	.write      = zfsfuse_write,
+	.release    = zfsfuse_release,
+	.opendir    = zfsfuse_opendir,
+	.readdir    = zfsfuse_readdir,
+	.releasedir = zfsfuse_release,
+	.lookup     = zfsfuse_lookup,
+	.getattr    = zfsfuse_getattr,
+	.readlink   = zfsfuse_readlink,
+	.mkdir      = zfsfuse_mkdir,
+	.rmdir      = zfsfuse_rmdir,
 	.create     = zfsfuse_create_helper,
-	.unlink     = zfsfuse_unlink_helper,
-	.mknod      = zfsfuse_mknod_helper,
-	.symlink    = zfsfuse_symlink_helper,
-	.link       = zfsfuse_link_helper,
-	.rename     = zfsfuse_rename_helper,
-	.setattr    = zfsfuse_setattr_helper,
-	.fsync      = zfsfuse_fsync_helper,
-	.fsyncdir   = zfsfuse_fsync_helper,
-	.access     = zfsfuse_access_helper,
+	.unlink     = zfsfuse_unlink,
+	.mknod      = zfsfuse_mknod,
+	.symlink    = zfsfuse_symlink,
+	.link       = zfsfuse_link,
+	.rename     = zfsfuse_rename,
+	.setattr    = zfsfuse_setattr,
+	.fsync      = zfsfuse_fsync,
+	.fsyncdir   = zfsfuse_fsync,
+	.access     = zfsfuse_access,
 	.statfs     = zfsfuse_statfs,
 	.destroy    = zfsfuse_destroy,
 };
