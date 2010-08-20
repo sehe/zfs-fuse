@@ -57,6 +57,27 @@
 #define print_debug
 #endif
 
+// these quick-n-dirty macros help if you already hae the zfsvfs pointer
+#define FUSE2ZFS(ino,vfs) ((ino)==1? vfs->z_root : (ino))
+#define ZFS2FUSE(ino,vfs) ((ino)==vfs->z_root? 1 : (ino))
+
+// this strongly typed function is here for calls from _helper functions (TODO remove)
+static fuse_ino_t fuse2zfs(fuse_req_t req, fuse_ino_t ino)
+{
+    switch (ino)
+    {
+        case 1: // root
+            {
+                vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
+                zfsvfs_t *zfsvfs = vfs->vfs_data;
+                return zfsvfs->z_root;
+            }
+        default:
+            return ino;
+    }
+}
+
+
  /* the command-line options */
 int block_cache;
 int cf_enable_xattr = 0;
@@ -125,7 +146,7 @@ static void zfsfuse_statfs(fuse_req_t req, fuse_ino_t ino)
 	fuse_reply_statfs(req, &stat);
 }
 
-static int zfsfuse_stat(vnode_t *vp, struct stat *stbuf, cred_t *cred)
+static int zfsfuse_stat(zfsvfs_t* zfsvfs, vnode_t *vp, struct stat *stbuf, cred_t *cred)
 {
 	ASSERT(vp != NULL);
 	ASSERT(stbuf != NULL);
@@ -140,7 +161,7 @@ static int zfsfuse_stat(vnode_t *vp, struct stat *stbuf, cred_t *cred)
 	memset(stbuf, 0, sizeof(struct stat));
 
 	stbuf->st_dev = vattr.va_fsid;
-	stbuf->st_ino = vattr.va_nodeid == 3 ? 1 : vattr.va_nodeid;
+	stbuf->st_ino = ZFS2FUSE(vattr.va_nodeid, zfsvfs);
 	stbuf->st_mode = VTTOIF(vattr.va_type) | vattr.va_mode;
 	stbuf->st_nlink = vattr.va_nlink;
 	stbuf->st_uid = vattr.va_uid;
@@ -182,7 +203,7 @@ static int zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 	zfsfuse_getcred(req, &cred);
 
 	struct stat stbuf;
-	error = zfsfuse_stat(vp, &stbuf, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &stbuf, &cred);
 
 	VN_RELE(vp);
 	ZFS_EXIT(zfsvfs);
@@ -195,7 +216,7 @@ static int zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 
 static void zfsfuse_getattr_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_getattr(req, real_ino, fi);
 	if(error)
@@ -216,7 +237,7 @@ static int int_zfs_enter(zfsvfs_t *zfsvfs) {
 #define MY_LOOKUP_XATTR() \
     vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);		\
     zfsvfs_t *zfsvfs = vfs->vfs_data;				\
-    if (ino == 1) ino = 3;					\
+    ino = FUSE2ZFS(ino, zfsvfs);					\
 								\
     ZFS_VOID_ENTER(zfsvfs);					\
 								\
@@ -503,14 +524,13 @@ static int zfsfuse_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 		goto out;
 
 	e.ino = VTOZ(vp)->z_id;
-	if(e.ino == 3)
-		e.ino = 1;
+    e.ino = ZFS2FUSE(e.ino, zfsvfs);
 
 	znode_t *zp = VTOZ(vp);
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 		sizeof(e.generation));
 
-	error = zfsfuse_stat(vp, &e.attr, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 
 out:
 	if(vp != NULL)
@@ -526,7 +546,7 @@ out:
 
 static void zfsfuse_lookup_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_lookup(req, real_parent, name);
 	if(error)
@@ -604,7 +624,7 @@ out:
 
 static void zfsfuse_opendir_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_opendir(req, real_ino, fi);
 	if(error)
@@ -642,7 +662,7 @@ static int zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 
 static void zfsfuse_release_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_release(req, real_ino, fi);
 	/* Release events always reply_err */
@@ -739,7 +759,7 @@ out:
 
 static void zfsfuse_readdir_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_readdir(req, real_ino, size, off, fi);
 	if(error)
@@ -885,7 +905,7 @@ static int zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_i
 	struct fuse_entry_param e = { 0 };
 
 	if(flags & FCREAT) {
-		error = zfsfuse_stat(vp, &e.attr, &cred);
+		error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 		if(error)
 			goto out;
 	}
@@ -910,8 +930,7 @@ static int zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_i
 		e.entry_timeout = fuse_entry_timeout;
 		znode_t *zp = VTOZ(vp);
 		e.ino = zp->z_id;
-		if(e.ino == 3)
-			e.ino = 1;
+        e.ino = ZFS2FUSE(e.ino, zfsvfs);
 		sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 			sizeof(e.generation));
 	}
@@ -935,7 +954,7 @@ out:
 
 static void zfsfuse_open_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_opencreate(req, real_ino, fi, fi->flags, 0, NULL);
 	if(error)
@@ -944,7 +963,7 @@ static void zfsfuse_open_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file
 
 static void zfsfuse_create_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_opencreate(req, real_parent, fi, fi->flags | O_CREAT, mode, name);
 	if(error)
@@ -1006,7 +1025,7 @@ static int zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
 
 static void zfsfuse_readlink_helper(fuse_req_t req, fuse_ino_t ino)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_readlink(req, real_ino);
 	if(error)
@@ -1062,7 +1081,7 @@ static int zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
 
 static void zfsfuse_read_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_read(req, real_ino, size, off, fi);
 	if(error)
@@ -1117,13 +1136,12 @@ static int zfsfuse_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
 
 	znode_t *zp = VTOZ(vp);
 	e.ino = zp->z_id;
-	if(e.ino == 3)
-		e.ino = 1;
+    e.ino = ZFS2FUSE(e.ino, zfsvfs);
 
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 		sizeof(e.generation));
 
-	error = zfsfuse_stat(vp, &e.attr, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 
 out:
 	if(vp != NULL)
@@ -1139,7 +1157,7 @@ out:
 
 static void zfsfuse_mkdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_mkdir(req, real_parent, name, mode);
 	if(error)
@@ -1190,7 +1208,7 @@ static int zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 
 static void zfsfuse_rmdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_rmdir(req, real_parent, name);
 	/* rmdir events always reply_err */
@@ -1312,7 +1330,7 @@ out: ;
 	struct stat stat_reply;
 
 	if(!error)
-		error = zfsfuse_stat(vp, &stat_reply, &cred);
+		error = zfsfuse_stat(zfsvfs, vp, &stat_reply, &cred);
 
 	/* Do not release if vp was an opened inode */
 	if(release)
@@ -1328,7 +1346,7 @@ out: ;
 
 static void zfsfuse_setattr_helper(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_setattr(req, real_ino, attr, to_set, fi);
 	if(error)
@@ -1373,7 +1391,7 @@ static int zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
 static void zfsfuse_unlink_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_unlink(req, real_parent, name);
 	/* unlink events always reply_err */
@@ -1426,7 +1444,7 @@ static int zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
 
 static void zfsfuse_write_helper(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_write(req, real_ino, buf, size, off, fi);
 	if(error)
@@ -1490,13 +1508,12 @@ static int zfsfuse_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mo
 
 	znode_t *zp = VTOZ(vp);
 	e.ino = zp->z_id;
-	if(e.ino == 3)
-		e.ino = 1;
+    e.ino = ZFS2FUSE(e.ino, zfsvfs);
 
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 		sizeof(e.generation));
 
-	error = zfsfuse_stat(vp, &e.attr, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 
 out:
 	if(vp != NULL)
@@ -1511,7 +1528,7 @@ out:
 
 static void zfsfuse_mknod_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_mknod(req, real_parent, name, mode, rdev);
 	if(error)
@@ -1571,13 +1588,12 @@ static int zfsfuse_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, 
 
 	znode_t *zp = VTOZ(vp);
 	e.ino = zp->z_id;
-	if(e.ino == 3)
-		e.ino = 1;
+    e.ino = ZFS2FUSE(e.ino, zfsvfs);
 
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 		sizeof(e.generation));
 
-	error = zfsfuse_stat(vp, &e.attr, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 
 out:
 	if(vp != NULL)
@@ -1594,7 +1610,7 @@ out:
 
 static void zfsfuse_symlink_helper(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
 
 	int error = zfsfuse_symlink(req, link, real_parent, name);
 	if(error)
@@ -1657,8 +1673,8 @@ static int zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, f
 
 static void zfsfuse_rename_helper(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
 {
-	fuse_ino_t real_parent = parent == 1 ? 3 : parent;
-	fuse_ino_t real_newparent = newparent == 1 ? 3 : newparent;
+	fuse_ino_t real_parent = fuse2zfs(req, parent);
+	fuse_ino_t real_newparent = fuse2zfs(req, newparent);
 
 	int error = zfsfuse_rename(req, real_parent, name, real_newparent, newname);
 
@@ -1693,7 +1709,7 @@ static int zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fu
 
 static void zfsfuse_fsync_helper(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_fsync(req, real_ino, datasync, fi);
 
@@ -1761,13 +1777,12 @@ static int zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, co
 
 	znode_t *zp = VTOZ(vp);
 	e.ino = zp->z_id;
-	if(e.ino == 3)
-		e.ino = 1;
+    e.ino = ZFS2FUSE(e.ino, zfsvfs);
 
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_GEN(zp->z_zfsvfs), &e.generation,
 		sizeof(e.generation));
 
-	error = zfsfuse_stat(vp, &e.attr, &cred);
+	error = zfsfuse_stat(zfsvfs, vp, &e.attr, &cred);
 
 out:
 	if(vp != NULL)
@@ -1785,8 +1800,8 @@ out:
 
 static void zfsfuse_link_helper(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
-	fuse_ino_t real_newparent = newparent == 1 ? 3 : newparent;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
+	fuse_ino_t real_newparent = fuse2zfs(req, newparent);
 
 	int error = zfsfuse_link(req, real_ino, real_newparent, newname);
 	if(error)
@@ -1837,7 +1852,7 @@ static int zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
 
 static void zfsfuse_access_helper(fuse_req_t req, fuse_ino_t ino, int mask)
 {
-	fuse_ino_t real_ino = ino == 1 ? 3 : ino;
+	fuse_ino_t real_ino = fuse2zfs(req, ino);
 
 	int error = zfsfuse_access(req, real_ino, mask);
 
