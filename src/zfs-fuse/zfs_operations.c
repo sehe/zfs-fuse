@@ -629,18 +629,18 @@ static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 
 static void zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
+	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
+	zfsvfs_t *zfsvfs = vfs->vfs_data;
+    ino = FUSE2ZFS(ino, zfsvfs);
 	vnode_t *vp = ((file_info_t *)(uintptr_t) fi->fh)->vp;
 	ASSERT(vp != NULL);
 	ASSERT(VTOZ(vp) != NULL);
+	ASSERT(VTOZ(vp)->z_id == ino);
 
 	if(vp->v_type != VDIR)
 		FUSE_REPLY_ERR(ENOTDIR);
 
     print_debug("function %s\n",__FUNCTION__);
-	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
-	zfsvfs_t *zfsvfs = vfs->vfs_data;
-    ino = FUSE2ZFS(ino, zfsvfs);
-	ASSERT(VTOZ(vp)->z_id == ino);
 
 	char *outbuf = kmem_alloc(size, KM_NOSLEEP);
 	if(outbuf == NULL)
@@ -971,17 +971,17 @@ static void zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
 
 static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
+	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
+	zfsvfs_t *zfsvfs = vfs->vfs_data;
+    ino = FUSE2ZFS(ino, zfsvfs);
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 
 	vnode_t *vp = info->vp;
 	ASSERT(vp != NULL);
 	ASSERT(VTOZ(vp) != NULL);
+	ASSERT(VTOZ(vp)->z_id == ino);
 
     print_debug("function %s\n",__FUNCTION__);
-	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
-	zfsvfs_t *zfsvfs = vfs->vfs_data;
-    ino = FUSE2ZFS(ino, zfsvfs);
-	ASSERT(VTOZ(vp)->z_id == ino);
 
 	char *outbuf = kmem_alloc(size, KM_NOSLEEP);
 	if(outbuf == NULL)
@@ -1300,17 +1300,17 @@ static void zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
 static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
+	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
+	zfsvfs_t *zfsvfs = vfs->vfs_data;
+    ino = FUSE2ZFS(ino, zfsvfs);
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 
 	vnode_t *vp = info->vp;
 	ASSERT(vp != NULL);
 	ASSERT(VTOZ(vp) != NULL);
+	ASSERT(VTOZ(vp)->z_id == ino);
 
     print_debug("function %s\n",__FUNCTION__);
-	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
-	zfsvfs_t *zfsvfs = vfs->vfs_data;
-    ino = FUSE2ZFS(ino, zfsvfs);
-	ASSERT(VTOZ(vp)->z_id == ino);
 
 	FUSE_ZFS_ENTER(zfsvfs);
 
@@ -1503,6 +1503,9 @@ static void zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
+	/* Here, it's probably over zealous, there are no chances to rename
+	 * the root znode. It's more to do like for all the other inodes
+	 * manipulations... */
     parent = FUSE2ZFS(parent,zfsvfs);
     newparent = FUSE2ZFS(newparent,zfsvfs);
 
