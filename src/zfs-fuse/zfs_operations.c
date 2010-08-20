@@ -196,16 +196,16 @@ static int int_zfs_enter(zfsvfs_t *zfsvfs) {
 
 // This macro allows to call ZFS_ENTER from a void function without warning
 #define ZFS_VOID_ENTER(a) \
-    int error; \
-    do { if ((error = int_zfs_enter(zfsvfs)) != 0) VOID_ERROR( error); } while(0)
+    do { int error; if ((error = int_zfs_enter(zfsvfs)) != 0) VOID_ERROR( error); } while(0)
+#define VOID_ZFS_ENTER(a) ZFS_VOID_ENTER(a)
 
-static int zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	ZFS_VOID_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -214,7 +214,7 @@ static int zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -234,14 +234,12 @@ static int zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 		fuse_reply_attr(req, &stbuf, fuse_attr_timeout);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_getattr_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_getattr(req, fuse2zfs(req, ino), fi);
+	zfsfuse_getattr(req, fuse2zfs(req, ino), fi);
 }
 
 /* This macro makes the lookup for the xattr directory, necessary for listxattr
@@ -255,7 +253,7 @@ static void zfsfuse_getattr_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_f
 								\
     znode_t *znode;						\
 								\
-    error = zfs_zget(zfsvfs, ino, &znode, B_FALSE);		\
+    int error = zfs_zget(zfsvfs, ino, &znode, B_FALSE);		\
     if(error) {							\
 	ZFS_EXIT(zfsvfs);					\
 	fuse_reply_err(req, error == EEXIST ? ENOENT : error);	\
@@ -486,16 +484,16 @@ out:
     fuse_reply_err(req,error);
 }
 
-static int zfsfuse_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void zfsfuse_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -504,7 +502,7 @@ static int zfsfuse_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -554,23 +552,21 @@ out:
 		fuse_reply_entry(req, &e);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_lookup_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	int error = zfsfuse_lookup(req, fuse2zfs(req, parent), name);
+	zfsfuse_lookup(req, fuse2zfs(req, parent), name);
 }
 
-static int zfsfuse_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void zfsfuse_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -579,7 +575,7 @@ static int zfsfuse_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -631,23 +627,21 @@ out:
 		fuse_reply_open(req, fi);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_opendir_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_opendir(req, fuse2zfs(req, ino), fi);
+	zfsfuse_opendir(req, fuse2zfs(req, ino), fi);
 }
 
-static int zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 	ASSERT(info->vp != NULL);
@@ -668,15 +662,15 @@ static int zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 	ZFS_EXIT(zfsvfs);
 
     /* Release events always reply_err */
-    ERROR(error);
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_release_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_release(req, fuse2zfs(req, ino), fi);
+	zfsfuse_release(req, fuse2zfs(req, ino), fi);
 }
 
-static int zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
+static void zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
 	vnode_t *vp = ((file_info_t *)(uintptr_t) fi->fh)->vp;
 	ASSERT(vp != NULL);
@@ -684,7 +678,7 @@ static int zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t of
 	ASSERT(VTOZ(vp)->z_id == ino);
 
 	if(vp->v_type != VDIR)
-		ERROR(ENOTDIR);
+		VOID_ERROR(ENOTDIR);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
@@ -692,9 +686,9 @@ static int zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t of
 
 	char *outbuf = kmem_alloc(size, KM_NOSLEEP);
 	if(outbuf == NULL)
-		ERROR(ENOMEM);
+		VOID_ERROR(ENOMEM);
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	cred_t cred;
 	zfsfuse_getcred(req, &cred);
@@ -762,26 +756,24 @@ out:
 	kmem_free(outbuf, size);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_readdir_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_readdir(req, fuse2zfs(req, ino), size, off, fi);
+	zfsfuse_readdir(req, fuse2zfs(req, ino), size, off, fi);
 }
 
-static int zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, int fflags, mode_t createmode, const char *name)
+static void zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, int fflags, mode_t createmode, const char *name)
 {
 	if(name && strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	cred_t cred;
 	zfsfuse_getcred(req, &cred);
@@ -826,7 +818,7 @@ static int zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_i
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -956,28 +948,26 @@ out:
 			fuse_reply_create(req, &e, fi);
 	}
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_open_helper(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_opencreate(req, fuse2zfs(req, ino), fi, fi->flags, 0, NULL);
+	zfsfuse_opencreate(req, fuse2zfs(req, ino), fi, fi->flags, 0, NULL);
 }
 
 static void zfsfuse_create_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_opencreate(req, fuse2zfs(req, parent), fi, fi->flags | O_CREAT, mode, name);
+	zfsfuse_opencreate(req, fuse2zfs(req, parent), fi, fi->flags | O_CREAT, mode, name);
 }
 
-static int zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
+static void zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -986,7 +976,7 @@ static int zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1022,17 +1012,15 @@ static int zfsfuse_readlink(fuse_req_t req, fuse_ino_t ino)
 	}
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_readlink_helper(fuse_req_t req, fuse_ino_t ino)
 {
-	int error = zfsfuse_readlink(req, fuse2zfs(req, ino));
+	zfsfuse_readlink(req, fuse2zfs(req, ino));
 }
 
-static int zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
+static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 
@@ -1047,9 +1035,9 @@ static int zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
 
 	char *outbuf = kmem_alloc(size, KM_NOSLEEP);
 	if(outbuf == NULL)
-		ERROR(ENOMEM);
+		VOID_ERROR(ENOMEM);
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	iovec_t iovec;
 	uio_t uio;
@@ -1077,26 +1065,24 @@ static int zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
 	kmem_free(outbuf, size);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_read_helper(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_read(req, fuse2zfs(req, ino), size, off, fi);
+	zfsfuse_read(req, fuse2zfs(req, ino), size, off, fi);
 }
 
-static int zfsfuse_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
+static void zfsfuse_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1105,7 +1091,7 @@ static int zfsfuse_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1152,26 +1138,24 @@ out:
 		fuse_reply_entry(req, &e);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_mkdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
 {
-	int error = zfsfuse_mkdir(req, fuse2zfs(req, parent), name, mode);
+	zfsfuse_mkdir(req, fuse2zfs(req, parent), name, mode);
 }
 
-static int zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1180,7 +1164,7 @@ static int zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1202,23 +1186,21 @@ static int zfsfuse_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 	ZFS_EXIT(zfsvfs);
 
     /* rmdir events always reply_err */
-    ERROR(error);
-
-    return 0;
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_rmdir_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	int error = zfsfuse_rmdir(req, fuse2zfs(req, parent), name);
+	zfsfuse_rmdir(req, fuse2zfs(req, parent), name);
 }
 
-static int zfsfuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
+static void zfsfuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	vnode_t *vp;
 	boolean_t release;
@@ -1236,7 +1218,7 @@ static int zfsfuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
 			ZFS_EXIT(zfsvfs);
 			/* If the inode we are trying to get was recently deleted
 			   dnode_hold_impl will return EEXIST instead of ENOENT */
-			ERROR(error == EEXIST ? ENOENT : error);
+			VOID_ERROR(error == EEXIST ? ENOENT : error);
 		}
 		ASSERT(znode != NULL);
 		vp = ZTOV(znode);
@@ -1339,26 +1321,24 @@ out: ;
 		fuse_reply_attr(req, &stat_reply, fuse_attr_timeout);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_setattr_helper(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_setattr(req, fuse2zfs(req, ino), attr, to_set, fi);
+	zfsfuse_setattr(req, fuse2zfs(req, ino), attr, to_set, fi);
 }
 
-static int zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1367,7 +1347,7 @@ static int zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1383,17 +1363,15 @@ static int zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 	ZFS_EXIT(zfsvfs);
 
     /* unlink events always reply_err */
-    ERROR(error);
-
-    return 0;
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_unlink_helper(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	int error = zfsfuse_unlink(req, fuse2zfs(req, parent), name);
+	zfsfuse_unlink(req, fuse2zfs(req, parent), name);
 }
 
-static int zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
+static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 
@@ -1406,7 +1384,7 @@ static int zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	iovec_t iovec;
 	uio_t uio;
@@ -1435,26 +1413,24 @@ static int zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
 	}
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_write_helper(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_write(req, fuse2zfs(req, ino), buf, size, off, fi);
+	zfsfuse_write(req, fuse2zfs(req, ino), buf, size, off, fi);
 }
 
-static int zfsfuse_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
+static void zfsfuse_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1463,7 +1439,7 @@ static int zfsfuse_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mo
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1518,26 +1494,24 @@ out:
 		fuse_reply_entry(req, &e);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_mknod_helper(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev)
 {
-	int error = zfsfuse_mknod(req, fuse2zfs(req, parent), name, mode, rdev);
+	zfsfuse_mknod(req, fuse2zfs(req, parent), name, mode, rdev);
 }
 
-static int zfsfuse_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
+static void zfsfuse_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1546,7 +1520,7 @@ static int zfsfuse_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, 
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1599,28 +1573,26 @@ out:
 		fuse_reply_entry(req, &e);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_symlink_helper(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name)
 {
-	int error = zfsfuse_symlink(req, link, fuse2zfs(req, parent), name);
+	zfsfuse_symlink(req, link, fuse2zfs(req, parent), name);
 }
 
-static int zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
+static void zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
 {
 	if(strlen(name) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 	if(strlen(newname) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *p_znode, *np_znode;
 
@@ -1629,7 +1601,7 @@ static int zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, f
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(p_znode != NULL);
@@ -1640,7 +1612,7 @@ static int zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, f
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(np_znode != NULL);
@@ -1661,23 +1633,21 @@ static int zfsfuse_rename(fuse_req_t req, fuse_ino_t parent, const char *name, f
 	ZFS_EXIT(zfsvfs);
 
     /* rename events always reply_err */
-    ERROR(error);
-
-    return 0;
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_rename_helper(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname)
 {
-	int error = zfsfuse_rename(req, fuse2zfs(req, parent), name, fuse2zfs(req, newparent), newname);
+	zfsfuse_rename(req, fuse2zfs(req, parent), name, fuse2zfs(req, newparent), newname);
 }
 
-static int zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
+static void zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 	ASSERT(info->vp != NULL);
@@ -1694,26 +1664,24 @@ static int zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fu
 	ZFS_EXIT(zfsvfs);
 
     /* fsync events always reply_err */
-    ERROR(error);
-
-    return 0;
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_fsync_helper(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi)
 {
-	int error = zfsfuse_fsync(req, fuse2zfs(req, ino), datasync, fi);
+	zfsfuse_fsync(req, fuse2zfs(req, ino), datasync, fi);
 }
 
-static int zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
+static void zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
 {
 	if(strlen(newname) >= MAXNAMELEN)
-		ERROR(ENAMETOOLONG);
+		VOID_ERROR(ENAMETOOLONG);
 
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *td_znode, *s_znode;
 
@@ -1722,7 +1690,7 @@ static int zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, co
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(s_znode != NULL);
@@ -1733,7 +1701,7 @@ static int zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, co
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	vnode_t *svp = ZTOV(s_znode);
@@ -1783,23 +1751,21 @@ out:
 		fuse_reply_entry(req, &e);
 
     if (error)
-        ERROR(error);
-
-    return 0;
+        VOID_ERROR(error);
 }
 
 static void zfsfuse_link_helper(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
 {
-	int error = zfsfuse_link(req, fuse2zfs(req, ino), fuse2zfs(req, newparent), newname);
+	zfsfuse_link(req, fuse2zfs(req, ino), fuse2zfs(req, newparent), newname);
 }
 
-static int zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
+static void zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
 {
     print_debug("function %s\n",__FUNCTION__);
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
-	ZFS_ENTER(zfsvfs);
+	VOID_ZFS_ENTER(zfsvfs);
 
 	znode_t *znode;
 
@@ -1808,7 +1774,7 @@ static int zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
 		ZFS_EXIT(zfsvfs);
 		/* If the inode we are trying to get was recently deleted
 		   dnode_hold_impl will return EEXIST instead of ENOENT */
-		ERROR(error == EEXIST ? ENOENT : error);
+		VOID_ERROR(error == EEXIST ? ENOENT : error);
 	}
 
 	ASSERT(znode != NULL);
@@ -1833,14 +1799,12 @@ static int zfsfuse_access(fuse_req_t req, fuse_ino_t ino, int mask)
 	ZFS_EXIT(zfsvfs);
 
     /* access events always reply_err */
-    ERROR(error);
-
-    return 0;
+    VOID_ERROR(error);
 }
 
 static void zfsfuse_access_helper(fuse_req_t req, fuse_ino_t ino, int mask)
 {
-	int error = zfsfuse_access(req, fuse2zfs(req, ino), mask);
+	zfsfuse_access(req, fuse2zfs(req, ino), mask);
 }
 
 struct fuse_lowlevel_ops zfs_operations =
