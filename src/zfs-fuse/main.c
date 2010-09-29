@@ -332,7 +332,7 @@ static void parse_args(int argc, char *argv[])
 			case 's':
 				check_opt(progname,"-s");
 				if (stack_size != 0ul)
-					syslog(LOG_WARNING,"%s: conflicting stack_size, prior setting %lu ignored", progname, stack_size);
+					syslog(LOG_WARNING,"%s: conflicting stack_size, prior setting %u ignored", progname, stack_size);
 
 				stack_size=strtoul(optarg,&detecterror,10)<<10;
 				syslog(LOG_WARNING,"stack size for threads %zd",stack_size);
@@ -434,7 +434,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "%s: Warning: enabling xattr support should only be done when really required; performance will be affected\n", argv[0]);
 
 	/* notice about ARC size */
-	if (max_arc_size)	syslog(LOG_NOTICE,"ARC caching: maximum ARC size: " FU64 " MiB", max_arc_size>>20);
+	if (max_arc_size)	syslog(LOG_NOTICE,"ARC caching: maximum ARC size: %" FU64 " MiB", max_arc_size>>20);
 	else 			syslog(LOG_NOTICE,"ARC caching: maximum ARC size: compiled-in default");
 
 	if (!block_cache) /* direct IO enabled */
