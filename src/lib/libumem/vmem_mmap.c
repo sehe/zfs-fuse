@@ -66,10 +66,13 @@ void init_mmap() {
     char buf[80];
     FILE *f = fopen("/proc/sys/vm/max_map_count","r");
     if (!f) {
-	syslog(LOG_WARNING,"/proc/sys/vm/max_map_count unreadable - no /proc ?");
-	return;
+		syslog(LOG_WARNING,"/proc/sys/vm/max_map_count unreadable - no /proc ?");
+		return;
     }
-    fgets(buf,80,f);
+    if (!fgets(buf,80,f)) {
+		syslog(LOG_WARNING,"/proc/sys/vm/max_map_count unreadable - no permission ?");
+		buf[0] = 0;
+    }
     fclose(f);
     nb_mmap = atoi(buf);
     syslog(LOG_WARNING,"initial max_map_count %d",nb_mmap);

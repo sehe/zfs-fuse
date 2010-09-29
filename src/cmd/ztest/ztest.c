@@ -5504,7 +5504,7 @@ main(int argc, char **argv)
 			print_time(zs->zs_proc_stop - now, timebuf);
 			nicenum(zs->zs_space, numbuf);
 
-			(void) printf("Pass %3d, %8s, %3llu ENOSPC, "
+			(void) printf("Pass %3d, %8s, %3lu ENOSPC, "
 			    "%4.1f%% of %5s used, %3.0f%% done, %8s to go\n",
 			    iters,
 			    WIFEXITED(status) ? "Complete" : "SIGKILL",
@@ -5527,7 +5527,7 @@ main(int argc, char **argv)
 				zi = &zs->zs_info[f];
 				print_time(zi->zi_call_time, timebuf);
 				(void) dladdr((void *)zi->zi_func, &dli);
-				(void) printf("%7llu %9s   %s\n",
+				(void) printf("%7lu %9s   %s\n",
 				    zi->zi_call_count, timebuf,
 				    dli.dli_sname);
 			}
