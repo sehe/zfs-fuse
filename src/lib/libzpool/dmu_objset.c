@@ -19,9 +19,10 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
+/* Portions Copyright 2010 Robert Milkowski */
 
 #include <sys/cred.h>
 #include <sys/zfs_context.h>
@@ -41,6 +42,7 @@
 #include <sys/dmu_impl.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/sunddi.h>
+#include <sys/sa.h>
 
 spa_t *
 dmu_objset_spa(objset_t *os)
@@ -89,6 +91,12 @@ dmu_objset_id(objset_t *os)
 	dsl_dataset_t *ds = os->os_dsl_dataset;
 
 	return (ds ? ds->ds_object : 0);
+}
+
+uint64_t
+dmu_objset_syncprop(objset_t *os)
+{
+	return (os->os_sync);
 }
 
 uint64_t
@@ -184,6 +192,22 @@ secondary_cache_changed_cb(void *arg, uint64_t newval)
 }
 
 static void
+sync_changed_cb(void *arg, uint64_t newval)
+{
+	objset_t *os = arg;
+
+	/*
+	 * Inheritance and range checking should have been done by now.
+	 */
+	ASSERT(newval == ZFS_SYNC_STANDARD || newval == ZFS_SYNC_ALWAYS ||
+	    newval == ZFS_SYNC_DISABLED);
+
+	os->os_sync = newval;
+	if (os->os_zil)
+		zil_set_sync(os->os_zil, newval);
+}
+
+static void
 logbias_changed_cb(void *arg, uint64_t newval)
 {
 	objset_t *os = arg;
@@ -235,11 +259,11 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 
 		dprintf_bp(os->os_rootbp, "reading %s", "");
 		/*
-		 * NB: when bprewrite scrub can change the bp,
+		 * XXX when bprewrite scrub can change the bp,
 		 * and this is called from dmu_objset_open_ds_os, the bp
 		 * could change, and we'll need a lock.
 		 */
-		err = arc_read_nolock(NULL, spa, os->os_rootbp,
+		err = dsl_read_nolock(NULL, spa, os->os_rootbp,
 		    arc_getbuf_func, &os->os_phys_buf,
 		    ZIO_PRIORITY_SYNC_READ, ZIO_FLAG_CANFAIL, &aflags, &zb);
 		if (err) {
@@ -303,6 +327,9 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 			if (err == 0)
 				err = dsl_prop_register(ds, "logbias",
 				    logbias_changed_cb, os);
+			if (err == 0)
+				err = dsl_prop_register(ds, "sync",
+				    sync_changed_cb, os);
 		}
 		if (err) {
 			VERIFY(arc_buf_remove_ref(os->os_phys_buf,
@@ -318,6 +345,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 		os->os_dedup_checksum = ZIO_CHECKSUM_OFF;
 		os->os_dedup_verify = 0;
 		os->os_logbias = 0;
+		os->os_sync = 0;
 		os->os_primary_cache = ZFS_CACHE_ALL;
 		os->os_secondary_cache = ZFS_CACHE_ALL;
 	}
@@ -493,12 +521,17 @@ dmu_objset_evict(objset_t *os)
 			    dedup_changed_cb, os));
 			VERIFY(0 == dsl_prop_unregister(ds, "logbias",
 			    logbias_changed_cb, os));
+			VERIFY(0 == dsl_prop_unregister(ds, "sync",
+			    sync_changed_cb, os));
 		}
 		VERIFY(0 == dsl_prop_unregister(ds, "primarycache",
 		    primary_cache_changed_cb, os));
 		VERIFY(0 == dsl_prop_unregister(ds, "secondarycache",
 		    secondary_cache_changed_cb, os));
 	}
+
+	if (os->os_sa)
+		sa_tear_down(os);
 
 	/*
 	 * We should need only a single pass over the dnode list, since
@@ -595,6 +628,7 @@ struct oscarg {
 	const char *lastname;
 	dmu_objset_type_t type;
 	uint64_t flags;
+	cred_t *cr;
 };
 
 /*ARGSUSED*/
@@ -626,7 +660,7 @@ dmu_objset_create_check(void *arg1, void *arg2, dmu_tx_t *tx)
 }
 
 static void
-dmu_objset_create_sync(void *arg1, void *arg2, cred_t *cr, dmu_tx_t *tx)
+dmu_objset_create_sync(void *arg1, void *arg2, dmu_tx_t *tx)
 {
 	dsl_dir_t *dd = arg1;
 	struct oscarg *oa = arg2;
@@ -635,7 +669,7 @@ dmu_objset_create_sync(void *arg1, void *arg2, cred_t *cr, dmu_tx_t *tx)
 	ASSERT(dmu_tx_is_syncing(tx));
 
 	dsobj = dsl_dataset_create_sync(dd, oa->lastname,
-	    oa->clone_origin, oa->flags, cr, tx);
+	    oa->clone_origin, oa->flags, oa->cr, tx);
 
 	if (oa->clone_origin == NULL) {
 		dsl_dataset_t *ds;
@@ -651,12 +685,12 @@ dmu_objset_create_sync(void *arg1, void *arg2, cred_t *cr, dmu_tx_t *tx)
 		    ds, bp, oa->type, tx);
 
 		if (oa->userfunc)
-			oa->userfunc(os, oa->userarg, cr, tx);
+			oa->userfunc(os, oa->userarg, oa->cr, tx);
 		dsl_dataset_rele(ds, FTAG);
 	}
 
-	spa_history_internal_log(LOG_DS_CREATE, dd->dd_pool->dp_spa,
-	    tx, cr, "dataset = %llu", dsobj);
+	spa_history_log_internal(LOG_DS_CREATE, dd->dd_pool->dp_spa,
+	    tx, "dataset = %llu", dsobj);
 }
 
 int
@@ -682,6 +716,7 @@ dmu_objset_create(const char *name, dmu_objset_type_t type, uint64_t flags,
 	oa.lastname = tail;
 	oa.type = type;
 	oa.flags = flags;
+	oa.cr = CRED();
 
 	err = dsl_sync_task_do(pdd->dd_pool, dmu_objset_create_check,
 	    dmu_objset_create_sync, pdd, &oa, 5);
@@ -709,6 +744,7 @@ dmu_objset_clone(const char *name, dsl_dataset_t *clone_origin, uint64_t flags)
 	oa.lastname = tail;
 	oa.clone_origin = clone_origin;
 	oa.flags = flags;
+	oa.cr = CRED();
 
 	err = dsl_sync_task_do(pdd->dd_pool, dmu_objset_create_check,
 	    dmu_objset_create_sync, pdd, &oa, 5);
@@ -763,19 +799,19 @@ snapshot_check(void *arg1, void *arg2, dmu_tx_t *tx)
 }
 
 static void
-snapshot_sync(void *arg1, void *arg2, cred_t *cr, dmu_tx_t *tx)
+snapshot_sync(void *arg1, void *arg2, dmu_tx_t *tx)
 {
 	objset_t *os = arg1;
 	dsl_dataset_t *ds = os->os_dsl_dataset;
 	struct snaparg *sn = arg2;
 
-	dsl_dataset_snapshot_sync(ds, sn->snapname, cr, tx);
+	dsl_dataset_snapshot_sync(ds, sn->snapname, tx);
 
 	if (sn->props) {
 		dsl_props_arg_t pa;
 		pa.pa_props = sn->props;
 		pa.pa_source = ZPROP_SRC_LOCAL;
-		dsl_props_set_sync(ds->ds_prev, &pa, cr, tx);
+		dsl_props_set_sync(ds->ds_prev, &pa, tx);
 	}
 }
 
@@ -984,11 +1020,11 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	/*
 	 * Create the root block IO
 	 */
-	arc_release(os->os_phys_buf, &os->os_phys_buf);
-
 	SET_BOOKMARK(&zb, os->os_dsl_dataset ?
 	    os->os_dsl_dataset->ds_object : DMU_META_OBJSET,
 	    ZB_ROOT_OBJECT, ZB_ROOT_LEVEL, ZB_ROOT_BLKID);
+	VERIFY3U(0, ==, arc_release_bp(os->os_phys_buf, &os->os_phys_buf,
+	    os->os_rootbp, os->os_spa, &zb));
 
 	dmu_write_policy(os, NULL, 0, 0, &zp);
 
@@ -1050,7 +1086,7 @@ dmu_objset_is_dirty(objset_t *os, uint64_t txg)
 	    !list_is_empty(&os->os_free_dnodes[txg & TXG_MASK]));
 }
 
-static objset_used_cb_t *used_cbs[DMU_OST_NUMTYPES];
+objset_used_cb_t *used_cbs[DMU_OST_NUMTYPES];
 
 void
 dmu_objset_register_type(dmu_objset_type_t ost, objset_used_cb_t *cb)
@@ -1067,20 +1103,11 @@ dmu_objset_userused_enabled(objset_t *os)
 }
 
 static void
-do_userquota_callback(objset_t *os, dnode_phys_t *dnp,
-    boolean_t subtract, dmu_tx_t *tx)
+do_userquota_update(objset_t *os, uint64_t used, uint64_t flags,
+    uint64_t user, uint64_t group, boolean_t subtract, dmu_tx_t *tx)
 {
-	static const char zerobuf[DN_MAX_BONUSLEN] = {0};
-	uint64_t user, group;
-
-	ASSERT(dnp->dn_type != 0 ||
-	    (bcmp(DN_BONUS(dnp), zerobuf, DN_MAX_BONUSLEN) == 0 &&
-	    DN_USED_BYTES(dnp) == 0));
-
-	if ((dnp->dn_flags & DNODE_FLAG_USERUSED_ACCOUNTED) &&
-	    0 == used_cbs[os->os_phys->os_type](dnp->dn_bonustype,
-	    DN_BONUS(dnp), &user, &group)) {
-		int64_t delta = DNODE_SIZE + DN_USED_BYTES(dnp);
+	if ((flags & DNODE_FLAG_USERUSED_ACCOUNTED)) {
+		int64_t delta = DNODE_SIZE + used;
 		if (subtract)
 			delta = -delta;
 		VERIFY3U(0, ==, zap_increment_int(os, DMU_USERUSED_OBJECT,
@@ -1091,7 +1118,7 @@ do_userquota_callback(objset_t *os, dnode_phys_t *dnp,
 }
 
 void
-dmu_objset_do_userquota_callbacks(objset_t *os, dmu_tx_t *tx)
+dmu_objset_do_userquota_updates(objset_t *os, dmu_tx_t *tx)
 {
 	dnode_t *dn;
 	list_t *list = &os->os_synced_dnodes;
@@ -1100,7 +1127,6 @@ dmu_objset_do_userquota_callbacks(objset_t *os, dmu_tx_t *tx)
 
 	while (dn = list_head(list)) {
 		ASSERT(!DMU_OBJECT_IS_SPECIAL(dn->dn_object));
-		ASSERT(dn->dn_oldphys);
 		ASSERT(dn->dn_phys->dn_type == DMU_OT_NONE ||
 		    dn->dn_phys->dn_flags &
 		    DNODE_FLAG_USERUSED_ACCOUNTED);
@@ -1117,25 +1143,171 @@ dmu_objset_do_userquota_callbacks(objset_t *os, dmu_tx_t *tx)
 
 		/*
 		 * We intentionally modify the zap object even if the
-		 * net delta (due to phys-oldphys) is zero.  Otherwise
+		 * net delta is zero.  Otherwise
 		 * the block of the zap obj could be shared between
 		 * datasets but need to be different between them after
 		 * a bprewrite.
 		 */
-		do_userquota_callback(os, dn->dn_oldphys, B_TRUE, tx);
-		do_userquota_callback(os, dn->dn_phys, B_FALSE, tx);
 
-		/*
-		 * The mutex is needed here for interlock with dnode_allocate.
-		 */
 		mutex_enter(&dn->dn_mtx);
-		zio_buf_free(dn->dn_oldphys, sizeof (dnode_phys_t));
-		dn->dn_oldphys = NULL;
+		ASSERT(dn->dn_id_flags);
+		if (dn->dn_id_flags & DN_ID_OLD_EXIST)  {
+			do_userquota_update(os, dn->dn_oldused, dn->dn_oldflags,
+			    dn->dn_olduid, dn->dn_oldgid, B_TRUE, tx);
+		}
+		if (dn->dn_id_flags & DN_ID_NEW_EXIST) {
+			do_userquota_update(os, DN_USED_BYTES(dn->dn_phys),
+			    dn->dn_phys->dn_flags,  dn->dn_newuid,
+			    dn->dn_newgid, B_FALSE, tx);
+		}
+
+		dn->dn_oldused = 0;
+		dn->dn_oldflags = 0;
+		if (dn->dn_id_flags & DN_ID_NEW_EXIST) {
+			dn->dn_olduid = dn->dn_newuid;
+			dn->dn_oldgid = dn->dn_newgid;
+			dn->dn_id_flags |= DN_ID_OLD_EXIST;
+			if (dn->dn_bonuslen == 0)
+				dn->dn_id_flags |= DN_ID_CHKED_SPILL;
+			else
+				dn->dn_id_flags |= DN_ID_CHKED_BONUS;
+		}
+		dn->dn_id_flags &= ~(DN_ID_NEW_EXIST);
 		mutex_exit(&dn->dn_mtx);
 
 		list_remove(list, dn);
 		dnode_rele(dn, list);
 	}
+}
+
+/*
+ * Returns a pointer to data to find uid/gid from
+ *
+ * If a dirty record for transaction group that is syncing can't
+ * be found then NULL is returned.  In the NULL case it is assumed
+ * the uid/gid aren't changing.
+ */
+static void *
+dmu_objset_userquota_find_data(dmu_buf_impl_t *db, dmu_tx_t *tx)
+{
+	dbuf_dirty_record_t *dr, **drp;
+	void *data;
+
+	if (db->db_dirtycnt == 0)
+		return (db->db.db_data);  /* Nothing is changing */
+
+	for (drp = &db->db_last_dirty; (dr = *drp) != NULL; drp = &dr->dr_next)
+		if (dr->dr_txg == tx->tx_txg)
+			break;
+
+	if (dr == NULL)
+		data = NULL;
+	else if (dr->dr_dbuf->db_dnode->dn_bonuslen == 0 &&
+	    dr->dr_dbuf->db_blkid == DMU_SPILL_BLKID)
+		data = dr->dt.dl.dr_data->b_data;
+	else
+		data = dr->dt.dl.dr_data;
+	return (data);
+}
+
+void
+dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx)
+{
+	objset_t *os = dn->dn_objset;
+	void *data = NULL;
+	dmu_buf_impl_t *db = NULL;
+	uint64_t *user, *group;
+	int flags = dn->dn_id_flags;
+	int error;
+	boolean_t have_spill = B_FALSE;
+
+	if (!dmu_objset_userused_enabled(dn->dn_objset))
+		return;
+
+	if (before && (flags & (DN_ID_CHKED_BONUS|DN_ID_OLD_EXIST|
+	    DN_ID_CHKED_SPILL)))
+		return;
+
+	if (before && dn->dn_bonuslen != 0)
+		data = DN_BONUS(dn->dn_phys);
+	else if (!before && dn->dn_bonuslen != 0) {
+		if (dn->dn_bonus) {
+			db = dn->dn_bonus;
+			mutex_enter(&db->db_mtx);
+			data = dmu_objset_userquota_find_data(db, tx);
+		} else {
+			data = DN_BONUS(dn->dn_phys);
+		}
+	} else if (dn->dn_bonuslen == 0 && dn->dn_bonustype == DMU_OT_SA) {
+			int rf = 0;
+
+			if (RW_WRITE_HELD(&dn->dn_struct_rwlock))
+				rf |= DB_RF_HAVESTRUCT;
+			error = dmu_spill_hold_by_dnode(dn, rf,
+			    FTAG, (dmu_buf_t **)&db);
+			ASSERT(error == 0);
+			mutex_enter(&db->db_mtx);
+			data = (before) ? db->db.db_data :
+			    dmu_objset_userquota_find_data(db, tx);
+			have_spill = B_TRUE;
+	} else {
+		mutex_enter(&dn->dn_mtx);
+		dn->dn_id_flags |= DN_ID_CHKED_BONUS;
+		mutex_exit(&dn->dn_mtx);
+		return;
+	}
+
+	if (before) {
+		ASSERT(data);
+		user = &dn->dn_olduid;
+		group = &dn->dn_oldgid;
+	} else if (data) {
+		user = &dn->dn_newuid;
+		group = &dn->dn_newgid;
+	}
+
+	/*
+	 * Must always call the callback in case the object
+	 * type has changed and that type isn't an object type to track
+	 */
+	error = used_cbs[os->os_phys->os_type](dn->dn_bonustype, data,
+	    user, group);
+
+	/*
+	 * Preserve existing uid/gid when the callback can't determine
+	 * what the new uid/gid are and the callback returned EEXIST.
+	 * The EEXIST error tells us to just use the existing uid/gid.
+	 * If we don't know what the old values are then just assign
+	 * them to 0, since that is a new file  being created.
+	 */
+	if (!before && data == NULL && error == EEXIST) {
+		if (flags & DN_ID_OLD_EXIST) {
+			dn->dn_newuid = dn->dn_olduid;
+			dn->dn_newgid = dn->dn_oldgid;
+		} else {
+			dn->dn_newuid = 0;
+			dn->dn_newgid = 0;
+		}
+		error = 0;
+	}
+
+	if (db)
+		mutex_exit(&db->db_mtx);
+
+	mutex_enter(&dn->dn_mtx);
+	if (error == 0 && before)
+		dn->dn_id_flags |= DN_ID_OLD_EXIST;
+	if (error == 0 && !before)
+		dn->dn_id_flags |= DN_ID_NEW_EXIST;
+
+	if (have_spill) {
+		dn->dn_id_flags |= DN_ID_CHKED_SPILL;
+	} else {
+		dn->dn_id_flags |= DN_ID_CHKED_BONUS;
+	}
+	mutex_exit(&dn->dn_mtx);
+	if (have_spill)
+		dmu_buf_rele((dmu_buf_t *)db, FTAG);
 }
 
 boolean_t
@@ -1478,7 +1650,7 @@ dmu_objset_prefetch(const char *name, void *arg)
 			SET_BOOKMARK(&zb, ds->ds_object, ZB_ROOT_OBJECT,
 			    ZB_ROOT_LEVEL, ZB_ROOT_BLKID);
 
-			(void) arc_read_nolock(NULL, dsl_dataset_get_spa(ds),
+			(void) dsl_read_nolock(NULL, dsl_dataset_get_spa(ds),
 			    &ds->ds_phys->ds_bp, NULL, NULL,
 			    ZIO_PRIORITY_ASYNC_READ,
 			    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,

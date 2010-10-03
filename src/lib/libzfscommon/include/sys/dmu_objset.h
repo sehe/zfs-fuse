@@ -19,9 +19,10 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
+/* Portions Copyright 2010 Robert Milkowski */
 
 #ifndef	_SYS_DMU_OBJSET_H
 #define	_SYS_DMU_OBJSET_H
@@ -33,6 +34,7 @@
 #include <sys/dnode.h>
 #include <sys/zio.h>
 #include <sys/zil.h>
+#include <sys/sa.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -43,6 +45,9 @@ struct dmu_tx;
 
 #define	OBJSET_PHYS_SIZE 2048
 #define	OBJSET_OLD_PHYS_SIZE 1024
+
+#define	OBJSET_BUF_HAS_USERUSED(buf) \
+	(arc_buf_size(buf) > OBJSET_OLD_PHYS_SIZE)
 
 #define	OBJSET_FLAG_USERACCOUNTING_COMPLETE	(1ULL<<0)
 
@@ -77,6 +82,7 @@ struct objset {
 	uint8_t os_logbias;
 	uint8_t os_primary_cache;
 	uint8_t os_secondary_cache;
+	uint8_t os_sync;
 
 	/* no lock needed: */
 	struct dmu_tx *os_synctx; /* XXX sketchy */
@@ -99,6 +105,9 @@ struct objset {
 	/* stuff we store for the user */
 	kmutex_t os_user_ptr_lock;
 	void *os_user_ptr;
+
+	/* SA layout/attribute registration */
+	sa_os_t *os_sa;
 };
 
 #define	DMU_META_OBJSET		0
@@ -146,7 +155,8 @@ objset_t *dmu_objset_create_impl(spa_t *spa, struct dsl_dataset *ds,
 int dmu_objset_open_impl(spa_t *spa, struct dsl_dataset *ds, blkptr_t *bp,
     objset_t **osp);
 void dmu_objset_evict(objset_t *os);
-void dmu_objset_do_userquota_callbacks(objset_t *os, dmu_tx_t *tx);
+void dmu_objset_do_userquota_updates(objset_t *os, dmu_tx_t *tx);
+void dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx);
 boolean_t dmu_objset_userused_enabled(objset_t *os);
 int dmu_objset_userspace_upgrade(objset_t *os);
 boolean_t dmu_objset_userspace_present(objset_t *os);

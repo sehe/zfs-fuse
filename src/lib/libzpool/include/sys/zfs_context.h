@@ -212,6 +212,18 @@ typedef struct kthread kthread_t;
 #define	thread_create(stk, stksize, func, arg, len, pp, state, pri)	\
 	zk_thread_create(func, arg)
 #define	thread_exit() thr_exit(NULL)
+#define	thread_join(t)	panic("libzpool cannot join threads")
+
+#define	newproc(f, a, cid, pri, ctp, pid)	(ENOSYS)
+
+/* in libzpool, p0 exists only to have its address taken */
+struct proc {
+	uintptr_t	this_is_never_used_dont_dereference_it;
+};
+
+extern struct proc p0;
+
+#define	PS_NONE		-1
 
 extern kthread_t *zk_thread_create(void (*func)(), void *arg);
 
@@ -330,15 +342,21 @@ typedef void (task_func_t)(void *);
 #define	TASKQ_PREPOPULATE	0x0001
 #define	TASKQ_CPR_SAFE		0x0002	/* Use CPR safe protocol */
 #define	TASKQ_DYNAMIC		0x0004	/* Use dynamic thread scheduling */
-#define	TASKQ_THREADS_CPU_PCT	0x0008	/* Use dynamic thread scheduling */
+#define	TASKQ_THREADS_CPU_PCT	0x0008	/* Scale # threads by # cpus */
+#define	TASKQ_DC_BATCH		0x0010	/* Mark threads as batch */
 
 #define	TQ_SLEEP	KM_SLEEP	/* Can block for memory */
 #define	TQ_NOSLEEP	KM_NOSLEEP	/* cannot block for memory; may fail */
-#define	TQ_NOQUEUE	0x02	/* Do not enqueue if can't dispatch */
+#define	TQ_NOQUEUE	0x02		/* Do not enqueue if can't dispatch */
+#define	TQ_FRONT	0x08		/* Queue in front */
 
 extern taskq_t *system_taskq;
 
 extern taskq_t	*taskq_create(const char *, int, pri_t, int, int, uint_t);
+#define	taskq_create_proc(a, b, c, d, e, p, f) \
+	    (taskq_create(a, b, c, d, e, f))
+#define	taskq_create_sysdc(a, b, d, e, p, dc, f) \
+	    (taskq_create(a, b, maxclsyspri, d, e, f))
 extern taskqid_t taskq_dispatch(taskq_t *, task_func_t, void *, uint_t);
 extern void	taskq_destroy(taskq_t *);
 extern void	taskq_wait(taskq_t *);
@@ -359,6 +377,7 @@ typedef struct vnode {
 	struct stat64   v_stat;
 } vnode_t;
 
+#define	AV_SCANSTAMP_SZ	32		/* length of anti-virus scanstamp */
 
 typedef struct xoptattr {
 	timestruc_t	xoa_createtime;	/* Create time of file */
@@ -374,6 +393,8 @@ typedef struct xoptattr {
 	uint8_t		xoa_opaque;
 	uint8_t		xoa_av_quarantined;
 	uint8_t		xoa_av_modified;
+	uint8_t		xoa_av_scanstamp[AV_SCANSTAMP_SZ];
+	uint8_t		xoa_reparse;
 } xoptattr_t;
 
 typedef struct vattr {
@@ -514,6 +535,7 @@ typedef struct callb_cpr {
 
 extern char *kmem_asprintf(const char *fmt, ...);
 #define	strfree(str) kmem_free((str), strlen(str)+1)
+#define km_strdup(str) strcpy(kmem_alloc(strlen(str)+1,KM_SLEEP),str)
 
 /*
  * Hostname information
@@ -521,6 +543,9 @@ extern char *kmem_asprintf(const char *fmt, ...);
 extern char hw_serial[];	/* for userland-emulated hostid access */
 extern int ddi_strtoul(const char *str, char **nptr, int base,
     unsigned long *result);
+
+extern int ddi_strtoull(const char *str, char **nptr, int base,
+    u_longlong_t *result);
 
 /* ZFS Boot Related stuff. */
 

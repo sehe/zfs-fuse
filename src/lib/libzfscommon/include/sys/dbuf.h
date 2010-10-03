@@ -19,8 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 #ifndef	_SYS_DBUF_H
@@ -38,7 +37,6 @@
 extern "C" {
 #endif
 
-#define	DB_BONUS_BLKID (-1ULL)
 #define	IN_DMU_SYNC 2
 
 /*
@@ -242,6 +240,10 @@ uint64_t dbuf_whichblock(struct dnode *di, uint64_t offset);
 
 dmu_buf_impl_t *dbuf_create_tlib(struct dnode *dn, char *data);
 void dbuf_create_bonus(struct dnode *dn);
+int dbuf_spill_set_blksz(dmu_buf_t *db, uint64_t blksz, dmu_tx_t *tx);
+void dbuf_spill_hold(struct dnode *dn, dmu_buf_impl_t **dbp, void *tag);
+
+void dbuf_rm_spill(struct dnode *dn, dmu_tx_t *tx);
 
 dmu_buf_impl_t *dbuf_hold(struct dnode *dn, uint64_t blkid, const void *tag);
 dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
@@ -267,6 +269,7 @@ void dmu_buf_will_fill(dmu_buf_t *db, dmu_tx_t *tx);
 void dmu_buf_fill_done(dmu_buf_t *db, dmu_tx_t *tx);
 void dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx);
 dbuf_dirty_record_t *dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
+arc_buf_t *dbuf_loan_arcbuf(dmu_buf_impl_t *db);
 
 void dbuf_clear(dmu_buf_impl_t *db);
 void dbuf_evict(dmu_buf_impl_t *db);
@@ -274,6 +277,7 @@ void dbuf_evict(dmu_buf_impl_t *db);
 void dbuf_setdirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 void dbuf_unoverride(dbuf_dirty_record_t *dr);
 void dbuf_sync_list(list_t *list, dmu_tx_t *tx);
+void dbuf_release_bp(dmu_buf_impl_t *db);
 
 void dbuf_free_range(struct dnode *dn, uint64_t start, uint64_t end,
     struct dmu_tx *);

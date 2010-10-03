@@ -20,8 +20,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -39,6 +38,18 @@
 /*
  * Virtual device vector for files.
  */
+
+static void
+vdev_file_hold(vdev_t *vd)
+{
+	ASSERT(vd->vdev_path != NULL);
+}
+
+static void
+vdev_file_rele(vdev_t *vd)
+{
+	ASSERT(vd->vdev_path != NULL);
+}
 
 static int
 vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *ashift)
@@ -81,7 +92,7 @@ vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *ashift)
 	if (error == ENOENT && vd->vdev_guid) {
 	    // we didn't find it, let's try the uuid then...
 	    char path[64];
-	    sprintf(path,"/dev/disk/by-uuid/" FX64_UP,vd->vdev_guid);
+	    sprintf(path,"/dev/disk/by-uuid/%" FX64_UP,vd->vdev_guid);
 	    error = vn_openat(path + 1, UIO_SYSSPACE,
 		    spa_mode(vd->vdev_spa) | FOFFMAX, 0, &vp, 0, 0, rootdir, -1);
 	}
@@ -137,6 +148,7 @@ vdev_file_close(vdev_t *vd)
 		VN_RELE(vf->vf_vnode);
 	}
 
+	vd->vdev_delayed_close = B_FALSE;
 	kmem_free(vf, sizeof (vdev_file_t));
 	vd->vdev_tsd = NULL;
 }
@@ -252,6 +264,8 @@ vdev_ops_t vdev_file_ops = {
 	vdev_file_io_start,
 	vdev_file_io_done,
 	NULL,
+	vdev_file_hold,
+	vdev_file_rele,
 	VDEV_TYPE_FILE,		/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };
@@ -268,6 +282,8 @@ vdev_ops_t vdev_disk_ops = {
 	vdev_file_io_start,
 	vdev_file_io_done,
 	NULL,
+	vdev_file_hold,
+	vdev_file_rele,
 	VDEV_TYPE_DISK,		/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };

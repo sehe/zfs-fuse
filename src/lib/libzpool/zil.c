@@ -19,9 +19,10 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
+/* Portions Copyright 2010 Robert Milkowski */
 
 #include <sys/zfs_context.h>
 #include <sys/spa.h>
@@ -35,6 +36,7 @@
 #include <sys/dsl_dataset.h>
 #include <sys/vdev.h>
 #include <sys/dmu_tx.h>
+#include <sys/dsl_pool.h>
 
 /*
  * The zfs intent log (ZIL) saves transaction records of system calls
@@ -65,7 +67,7 @@
 /*
  * This global ZIL switch affects all pools
  */
-int zil_disable = 0;	/* disable intent logging */
+int zil_replay_disable = 0;    /* disable intent logging replay */
 
 /*
  * Tunable parameter for debugging or performance analysis.  Setting
@@ -178,7 +180,7 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 	SET_BOOKMARK(&zb, bp->blk_cksum.zc_word[ZIL_ZC_OBJSET],
 	    ZB_ZIL_OBJECT, ZB_ZIL_LEVEL, bp->blk_cksum.zc_word[ZIL_ZC_SEQ]);
 
-	error = arc_read_nolock(NULL, zilog->zl_spa, bp, arc_getbuf_func, &abuf,
+	error = dsl_read_nolock(NULL, zilog->zl_spa, bp, arc_getbuf_func, &abuf,
 	    ZIO_PRIORITY_SYNC_READ, zio_flags, &aflags, &zb);
 
 	if (error == 0) {
@@ -1266,7 +1268,7 @@ zil_commit_writer(zilog_t *zilog, uint64_t seq, uint64_t foid)
 void
 zil_commit(zilog_t *zilog, uint64_t seq, uint64_t foid)
 {
-	if (zilog == NULL || seq == 0)
+	if (zilog->zl_sync == ZFS_SYNC_DISABLED || seq == 0)
 		return;
 
 	mutex_enter(&zilog->zl_lock);
@@ -1398,6 +1400,12 @@ zil_fini(void)
 }
 
 void
+zil_set_sync(zilog_t *zilog, uint64_t sync)
+{
+	zilog->zl_sync = sync;
+}
+
+void
 zil_set_logbias(zilog_t *zilog, uint64_t logbias)
 {
 	zilog->zl_logbias = logbias;
@@ -1416,6 +1424,7 @@ zil_alloc(objset_t *os, zil_header_t *zh_phys)
 	zilog->zl_dmu_pool = dmu_objset_pool(os);
 	zilog->zl_destroy_txg = TXG_INITIAL - 1;
 	zilog->zl_logbias = dmu_objset_logbias(os);
+	zilog->zl_sync = dmu_objset_syncprop(os);
 
 	mutex_init(&zilog->zl_lock, NULL, MUTEX_DEFAULT, NULL);
 
@@ -1721,7 +1730,7 @@ zil_replay(objset_t *os, void *arg, zil_replay_func_t *replay_func[TX_MAX_TYPE])
 boolean_t
 zil_replaying(zilog_t *zilog, dmu_tx_t *tx)
 {
-	if (zilog == NULL)
+	if (zilog->zl_sync == ZFS_SYNC_DISABLED)
 		return (B_TRUE);
 
 	if (zilog->zl_replay) {

@@ -460,7 +460,9 @@ make_dataset_handle_common(zfs_handle_t *zhp, zfs_cmd_t *zc)
 	else
 		abort();	/* we should never see any other types */
 
-	zhp->zpool_hdl = zpool_handle(zhp);
+	if ((zhp->zpool_hdl = zpool_handle(zhp)) == NULL)
+		return (-1);
+
 	return (0);
 }
 
@@ -3448,6 +3450,10 @@ zfs_rollback(zfs_handle_t *zhp, zfs_handle_t *snap, boolean_t force)
 				    new_volsize);
 		}
 		zfs_close(zhp);
+	}
+	if (!err) {
+	    /* remount the fs to clear page cache */
+	    zfs_remount(zhp);
 	}
 	return (err);
 }
