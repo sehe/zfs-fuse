@@ -68,9 +68,6 @@ typedef struct {
 	ino_t ino;
 	file_info_t *info;
 	zfsvfs_t *zfsvfs;
-	/* pid is here to try to guess if get_info should really get this info
-	 * or not. Maybe a little paranoid ? It won't hurt anyway */
-	pid_t pid;
 } rec_t;
 
 /* This whole fi thing is really too much for what I want
@@ -86,7 +83,7 @@ struct {
 	pthread_mutex_t lock;
 } fi;
 
-static void add_fi(pid_t pid,zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
+static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
 	pthread_mutex_lock(&fi.lock);
 	if (fi.used == fi.alloc) {
 		fi.alloc += 10;
@@ -94,12 +91,11 @@ static void add_fi(pid_t pid,zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
 	}
 	fi.rec[fi.used].zfsvfs = zfsvfs;
 	fi.rec[fi.used].ino = ino;
-	fi.rec[fi.used].pid = pid;
 	fi.rec[fi.used++].info = info;
 	pthread_mutex_unlock(&fi.lock);
 }
 
-static file_info_t *get_info(pid_t pid,zfsvfs_t *zfsvfs, ino_t ino) {
+static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t ino) {
 	pthread_mutex_lock(&fi.lock);
 	int n;
 	/* It's to return info out of context. From getattr actually
@@ -107,8 +103,7 @@ static file_info_t *get_info(pid_t pid,zfsvfs_t *zfsvfs, ino_t ino) {
 	 * another process or another thread. In this case it must not
 	 * get the right info record or bad things happen */
 	for (n=0; n<fi.used; n++) {
-		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs &&
-				fi.rec[n].pid == pid) {
+		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs) {
 			/* This is a paranoid version, the mutex will be
 			 * returned only after info has been used */
 			return fi.rec[n].info;
@@ -142,14 +137,13 @@ static void free_fi(zfsvfs_t *zfsvfs, ino_t ino, file_info_t *info) {
 	pthread_mutex_unlock(&fi.lock);
 }
 
-static pid_t zfsfuse_getcred(fuse_req_t req, cred_t *cred)
+static void zfsfuse_getcred(fuse_req_t req, cred_t *cred)
 {
 	const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
 	cred->cr_uid = ctx->uid;
 	cred->cr_gid = ctx->gid;
 	cred->req = req;
-	return ctx->pid;
 }
 
 static void zfsfuse_destroy(void *userdata)
@@ -306,10 +300,8 @@ static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 	ino = FUSE2ZFS(ino, zfsvfs);
 
-	cred_t cred;
-	pid_t pid = zfsfuse_getcred(req, &cred);
 	file_info_t *info;
-	info = get_info(pid,zfsvfs,ino);
+	info = get_info(zfsvfs,ino);
 	if (info && info->used) {
 		/* We can't just adjust the size here because the writes are not
 		   always at the end of the file and it would be tedious to guess
@@ -335,6 +327,9 @@ static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 	ASSERT(znode != NULL);
 	vnode_t *vp = ZTOV(znode);
 	ASSERT(vp != NULL);
+
+	cred_t cred;
+	zfsfuse_getcred(req, &cred);
 
 	struct stat stbuf;
 	error = zfsfuse_stat(zfsvfs, vp, &stbuf, &cred);
@@ -864,7 +859,7 @@ static void zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_
 	ZFS_VOID_ENTER(zfsvfs);
 
 	cred_t cred;
-	pid_t pid = zfsfuse_getcred(req, &cred);
+	zfsfuse_getcred(req, &cred);
 
 	/* Map flags */
 	int mode, flags;
@@ -989,7 +984,7 @@ static void zfsfuse_opencreate(fuse_req_t req, fuse_ino_t ino, struct fuse_file_
 	info->flags = flags;
 	info->alloc = info->used = 0;
 	info->buffer = NULL;
-	add_fi(pid,zfsvfs,VTOZ(vp)->z_id,info);
+	add_fi(zfsvfs,VTOZ(vp)->z_id,info);
 
 	fi->fh = (uint64_t) (uintptr_t) info;
 	/* keep_cache is forced to 1.
