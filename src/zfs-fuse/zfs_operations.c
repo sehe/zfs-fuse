@@ -1481,7 +1481,7 @@ static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t s
     print_debug("function %s\n",__FUNCTION__);
 
 	int error = int_zfs_enter(zfsvfs);
-	if (error) return -error;
+	if (error) return error;
 
 	iovec_t iovec;
 	uio_t uio;
