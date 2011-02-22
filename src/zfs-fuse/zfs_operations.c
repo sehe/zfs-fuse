@@ -125,11 +125,10 @@ static void free_fi(zfsvfs_t *zfsvfs, ino_t ino, file_info_t *info) {
 	for (n=0; n<fi.used; n++) {
 		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs) {
 			if (fi.rec[n].info == info) {
-				if (n < fi.used-1) 
-					memmove(&fi.rec[n],&fi.rec[n+1],(fi.used-1-n)*sizeof(rec_t));
 				fi.used--;
-				pthread_mutex_unlock(&fi.lock);
-				return;
+				if (n < fi.used) 
+					memmove(&fi.rec[n],&fi.rec[n+1],(fi.used-n)*sizeof(rec_t));
+				break;
 			}
 		}
 	}
