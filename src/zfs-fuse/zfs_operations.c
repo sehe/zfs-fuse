@@ -1480,12 +1480,10 @@ static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t s
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
 	vnode_t *vp = info->vp;
-#if DEBUG
 	ino = FUSE2ZFS(ino, zfsvfs);
 	ASSERT(vp != NULL);
 	ASSERT(VTOZ(vp) != NULL);
 	ASSERT(VTOZ(vp)->z_id == ino);
-#endif
 
     print_debug("function %s\n",__FUNCTION__);
 
@@ -1508,10 +1506,19 @@ static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t s
 
 	cred_t cred;
 	zfsfuse_getcred(req, &cred);
+/*
+	xuio_t xuio;
+	uio.uio_extflg = UIO_XUIO;
+	xuio.xu_uio = uio;
+	xuio.xu_type = UIOTYPE_ZEROCOPY; */
 
 	error = VOP_WRITE(vp, &uio, info->flags, &cred, NULL);
 
 	ZFS_EXIT(zfsvfs);
+
+	if(!error) {
+		VERIFY(uio.uio_resid == 0);
+	}
 	return error;
 }
 
