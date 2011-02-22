@@ -84,6 +84,9 @@ struct {
 } fi;
 
 static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
+	if (!info || !zfsvfs || !ino)
+		return;
+
 	pthread_mutex_lock(&fi.lock);
 	if (fi.used == fi.alloc) {
 		fi.alloc *= 2;
@@ -96,6 +99,9 @@ static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
 }
 
 static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t ino) {
+	if (!zfsvfs || !ino)
+		return NULL;
+
 	pthread_mutex_lock(&fi.lock);
 	int n;
 	/* It's to return info out of context. From getattr actually
@@ -120,6 +126,9 @@ static void release_info()
 }
 
 static void free_fi(zfsvfs_t *zfsvfs, ino_t ino, file_info_t *info) {
+	if (!info || !zfsvfs || !ino)
+		return;
+
 	pthread_mutex_lock(&fi.lock);
 	int n;
 	for (n=0; n<fi.used; n++) {
