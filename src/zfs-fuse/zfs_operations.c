@@ -247,11 +247,6 @@ static int int_zfs_enter(zfsvfs_t *zfsvfs) {
     int error; \
     if ((error = int_zfs_enter(zfsvfs)) != 0) ERROR( error);
 
-static int zfs_enter(zfsvfs_t *zfsvfs) {
-	ZFS_ENTER(zfsvfs);
-	return 0;
-}
-
 static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, file_info_t *info);
 
 static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -1485,7 +1480,7 @@ static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t s
 
     print_debug("function %s\n",__FUNCTION__);
 
-	int error = zfs_enter(zfsvfs);
+	int error = int_zfs_enter(zfsvfs);
 	if (error) return -error;
 
 	iovec_t iovec;
