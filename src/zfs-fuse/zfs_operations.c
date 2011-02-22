@@ -76,7 +76,7 @@ typedef struct {
  * inode */
 struct {
 	rec_t *rec;
-	int alloc,used;
+	size_t alloc,used;
 	/* A lock. I would have prefered to do without
 	 * but it's clear that if lots of open operations come at the same time
 	 * from different fs, then there are race conditions possibilities */
@@ -1411,10 +1411,10 @@ int no_buffers = 0; // command line switch: no-buffers
 
 static void push(fuse_req_t req, fuse_ino_t ino, file_info_t *info, const char *buf, size_t size, off_t off)
 {
-	if (info->used + size < 128<<10) {
+	if (info->used + size < 128ul<<10) {
 		if (!info->used || info->last_off == off) {
 			if (info->alloc < info->used + size) {
-				int plus = info->used + size - info->alloc;
+				size_t plus = info->used + size - info->alloc;
 				if (plus < 4096) plus = 4096;
 				info->alloc += plus;
 				info->buffer = realloc(info->buffer,info->alloc);
