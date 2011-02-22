@@ -65,7 +65,7 @@ int cf_enable_xattr = 0;
 float fuse_attr_timeout, fuse_entry_timeout;
 
 typedef struct {
-	ino_t ino;
+	ino_t zfs_ino;
 	file_info_t *info;
 	zfsvfs_t *zfsvfs;
 } rec_t;
@@ -83,8 +83,8 @@ struct {
 	pthread_mutex_t lock;
 } fi;
 
-static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
-	if (!info || !zfsvfs || !ino)
+static void add_fi(zfsvfs_t *zfsvfs, ino_t zfs_ino,file_info_t *info) {
+	if (!info || !zfsvfs || !zfs_ino)
 		return;
 
 	pthread_mutex_lock(&fi.lock);
@@ -93,13 +93,13 @@ static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
 		fi.rec = realloc(fi.rec,sizeof(rec_t)*fi.alloc);
 	}
 	fi.rec[fi.used].zfsvfs = zfsvfs;
-	fi.rec[fi.used].ino = ino;
+	fi.rec[fi.used].zfs_ino = zfs_ino;
 	fi.rec[fi.used++].info = info;
 	pthread_mutex_unlock(&fi.lock);
 }
 
-static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t ino) {
-	if (!zfsvfs || !ino)
+static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t zfs_ino) {
+	if (!zfsvfs || !zfs_ino)
 		return NULL;
 
 	pthread_mutex_lock(&fi.lock);
@@ -109,7 +109,7 @@ static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t ino) {
 	 * another process or another thread. In this case it must not
 	 * get the right info record or bad things happen */
 	for (n=0; n<fi.used; n++) {
-		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs) {
+		if (fi.rec[n].zfs_ino == zfs_ino && fi.rec[n].zfsvfs == zfsvfs) {
 			/* This is a paranoid version, the mutex will be
 			 * returned only after info has been used */
 			if (fi.rec[n].info != NULL)
@@ -125,14 +125,14 @@ static void release_info()
 	pthread_mutex_unlock(&fi.lock);
 }
 
-static void free_fi(zfsvfs_t *zfsvfs, ino_t ino, file_info_t *info) {
-	if (!info || !zfsvfs || !ino)
+static void free_fi(zfsvfs_t *zfsvfs, ino_t zfs_ino, file_info_t *info) {
+	if (!info || !zfsvfs || !zfs_ino)
 		return;
 
 	pthread_mutex_lock(&fi.lock);
 	int n;
 	for (n=0; n<fi.used; n++) {
-		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs) {
+		if (fi.rec[n].zfs_ino == zfs_ino && fi.rec[n].zfsvfs == zfsvfs) {
 			if (fi.rec[n].info == info) {
 				fi.used--;
 				if (n < fi.used) 
@@ -1452,6 +1452,9 @@ static void push(fuse_req_t req, fuse_ino_t ino, file_info_t *info, const char *
 
 static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
+	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
+	zfsvfs_t *zfsvfs = vfs->vfs_data;
+	ino = FUSE2ZFS(ino, zfsvfs);
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
 	if (fi->flush || info->flags & FSYNC) {
 		if (info->used) {
@@ -1474,16 +1477,15 @@ static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_
 		fuse_reply_err(req, error);
 }
 
-static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, file_info_t *info)
+static int basic_write(fuse_req_t req, fuse_ino_t zfs_ino, const char *buf, size_t size, off_t off, file_info_t *info)
 {
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 
 	vnode_t *vp = info->vp;
-	ino = FUSE2ZFS(ino, zfsvfs);
 	ASSERT(vp != NULL);
 	ASSERT(VTOZ(vp) != NULL);
-	ASSERT(VTOZ(vp)->z_id == ino);
+	ASSERT(VTOZ(vp)->z_id == zfs_ino);
 
     print_debug("function %s\n",__FUNCTION__);
 
