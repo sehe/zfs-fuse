@@ -256,6 +256,7 @@ static int int_zfs_enter(zfsvfs_t *zfsvfs) {
     int error; \
     if ((error = int_zfs_enter(zfsvfs)) != 0) ERROR( error);
 
+static int fi_tryflush(fuse_req_t req, fuse_ino_t zfs_ino, file_info_t *info);
 static int basic_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, file_info_t *info);
 
 static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -267,15 +268,14 @@ static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 
 	file_info_t *info;
 	info = get_info(zfsvfs,ino);
-	if (info && info->used) {
+	int flush_error = 0;
+	if (info) {
 		/* We can't just adjust the size here because the writes are not
 		   always at the end of the file and it would be tedious to guess
 		   the right size without flushing */
-		basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-		info->used = 0;
-	}
-	if (info)
+		flush_error = fi_tryflush(req,ino,info);
 		release_info();
+	}
 
 	ZFS_VOID_ENTER(zfsvfs);
 
@@ -302,6 +302,8 @@ static void zfsfuse_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 	VN_RELE(vp);
 out:
 	ZFS_EXIT(zfsvfs);
+
+	error = error? error : flush_error;
 
 	if(!error)
 		fuse_reply_attr(req, &stbuf, fuse_attr_timeout);
@@ -731,11 +733,10 @@ static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 	ino = FUSE2ZFS(ino, zfsvfs);
 
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
-	if (info->used) {
-		basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-	}
+	int flush_err = fi_tryflush(req,ino,info);
 	if (info->alloc) {
 		free(info->buffer);
+		info->alloc = 0;
 	}
 	// an ino always has an entry even if it does not use buffers
 	free_fi(zfsvfs,ino,info);
@@ -758,7 +759,7 @@ static void zfsfuse_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
 
 	ZFS_EXIT(zfsvfs);
 	/* Release events always reply_err */
-	fuse_reply_err(req, error);
+	fuse_reply_err(req, error? error : flush_err);
 }
 
 static void zfsfuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
@@ -1092,10 +1093,7 @@ static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 	ino = FUSE2ZFS(ino, zfsvfs);
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
-	if (info->used) {
-		basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-		info->used = 0;
-	}
+	int flush_err = fi_tryflush(req,ino,info);
 
 	vnode_t *vp = info->vp;
 	ASSERT(vp != NULL);
@@ -1130,6 +1128,8 @@ static void zfsfuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	error = VOP_READ(vp, &uio, info->flags, &cred, NULL);
 
 	ZFS_EXIT(zfsvfs);
+
+	error = error? error : flush_err;
 
 	if(!error)
 		fuse_reply_buf(req, outbuf, uio.uio_loffset - off);
@@ -1418,8 +1418,23 @@ static void zfsfuse_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
 int no_buffers = 0; // command line switch: no-buffers
 
-static void push(fuse_req_t req, fuse_ino_t ino, file_info_t *info, const char *buf, size_t size, off_t off)
+static int fi_tryflush(fuse_req_t req, fuse_ino_t zfs_ino, file_info_t *info)
 {
+	int error = 0;
+	if (info->used)
+		error = basic_write(req,zfs_ino,info->buffer,info->used,info->last_off-info->used,info);
+	if (error)
+		syslog(LOG_ERR, "zfs_operations: buffer flush %lu bytes failed (%s)", info->used, strerror(error));
+	info->used = 0;
+	return error;
+}
+
+static int fi_append(fuse_req_t req, fuse_ino_t zfs_ino, file_info_t *info, const char *buf, size_t size, off_t off)
+{
+	if (!size) 
+		return 0;
+	ASSERT(buf);
+	int error = 0;
 	if (info->used + size < 128ul<<10) {
 		if (!info->used || info->last_off == off) {
 			if (info->alloc < info->used + size) {
@@ -1431,12 +1446,10 @@ static void push(fuse_req_t req, fuse_ino_t ino, file_info_t *info, const char *
 			memcpy(&info->buffer[info->used],buf,size);
 			info->used += size;
 			info->last_off = off + size;
-			return;
 		} else { // offset just changed, need to flush
-          basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-		  info->used = 0;
-		  push(req,ino,info,buf,size,off);
-		  return;
+		  error = fi_tryflush(req,zfs_ino,info);
+		  if (!error)
+		  	error = fi_append(req,zfs_ino,info,buf,size,off);
 		}
 	} else {
 		// to write + buffer > 128k, need to flush everything
@@ -1445,9 +1458,9 @@ static void push(fuse_req_t req, fuse_ino_t ino, file_info_t *info, const char *
 			info->buffer = realloc(info->buffer,info->alloc);
 		}
 		memcpy(&info->buffer[info->used],buf,size);
-		basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-		info->used = 0;
+		error = fi_tryflush(req,zfs_ino,info);
 	}
+	return error;
 }
 
 static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
@@ -1456,19 +1469,18 @@ static void zfsfuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 	ino = FUSE2ZFS(ino, zfsvfs);
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
-	if (fi->flush || info->flags & FSYNC) {
-		if (info->used) {
-			basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-			info->used = 0;
-		}
-	}
-	if (!no_buffers && !(fi->flush || (info->flags & FSYNC)) && (size < 4096 || info->used)) {
-		push(req,ino,info,buf,size,off);
-		fuse_reply_write(req, size /* - uio.uio_resid */);
-		return;
-	}
-	
-	int error = basic_write(req, ino, buf, size, off, info);
+	int synchronous = fi->flush || info->flags & FSYNC;
+	int flush_err = 0, error = 0;
+
+    if (synchronous)
+		flush_err = fi_tryflush(req,ino,info);
+
+	if (!no_buffers && !synchronous && (size < 4096 || info->used))
+		error = fi_append(req,ino,info,buf,size,off);
+	else 
+		error = basic_write(req, ino, buf, size, off, info);
+
+	error = error? error : flush_err;
 
 	if(!error) {
 		/* When not using direct_io, we must always write 'size' bytes */
@@ -1740,11 +1752,8 @@ static void zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct f
 	vfs_t *vfs = (vfs_t *) fuse_req_userdata(req);
 	zfsvfs_t *zfsvfs = vfs->vfs_data;
 	file_info_t *info = (file_info_t *)(uintptr_t) fi->fh;
-	if (info->used) {
-		basic_write(req,ino,info->buffer,info->used,info->last_off-info->used,info);
-		info->used = 0;
-	}
 
+	int flush_error = fi_tryflush(req,ino,info);
 	ZFS_VOID_ENTER(zfsvfs);
 
 #if DEBUG
@@ -1764,7 +1773,7 @@ static void zfsfuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct f
 	ZFS_EXIT(zfsvfs);
 
 	/* fsync events always reply_err */
-	fuse_reply_err(req, error);
+	fuse_reply_err(req, error? error:flush_error);
 }
 
 static void zfsfuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname)
