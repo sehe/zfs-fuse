@@ -106,7 +106,8 @@ static file_info_t *get_info(zfsvfs_t *zfsvfs, ino_t ino) {
 		if (fi.rec[n].ino == ino && fi.rec[n].zfsvfs == zfsvfs) {
 			/* This is a paranoid version, the mutex will be
 			 * returned only after info has been used */
-			return fi.rec[n].info;
+			if (fi.rec[n].info != NULL)
+				return fi.rec[n].info;
 		}
 	}
 	pthread_mutex_unlock(&fi.lock);
