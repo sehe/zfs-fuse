@@ -86,7 +86,7 @@ struct {
 static void add_fi(zfsvfs_t *zfsvfs, ino_t ino,file_info_t *info) {
 	pthread_mutex_lock(&fi.lock);
 	if (fi.used == fi.alloc) {
-		fi.alloc += 10;
+		fi.alloc *= 2;
 		fi.rec = realloc(fi.rec,sizeof(rec_t)*fi.alloc);
 	}
 	fi.rec[fi.used].zfsvfs = zfsvfs;
